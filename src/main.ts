@@ -1,8 +1,9 @@
 import "./style.css";
 import { SandScene, palettes } from "./scene";
 import { SensorInput } from "./sensors";
-import { detectBackends } from "./capabilities";
-import { FIXED_DT, MICRO_GRAIN_DIAMETER, estimatedDurationSeconds } from "./vessel";
+import { Physics, type PhysicsStats } from "./physics";
+import { GpuPhysics } from "./gpu-physics";
+import { FIXED_DT, MICRO_GRAIN_DIAMETER } from "./vessel";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -14,34 +15,21 @@ $("app").innerHTML =
 <aside><section class="sensor-section"><div class="section-title"><h2>物理输入</h2><span class="status-dot" id="status-dot"></span></div><p id="sensor-status" role="status" aria-live="polite">正在检测传感器…</p><button id="permission" class="wide">启用手机传感器</button><p class="fine" id="sensor-detail"></p><details><summary>传感器校准与物理边界</summary><p class="fine">沙漏固定于屏幕坐标系。输入为随设备运动的有效加速度，不是惯性系中的地球引力。相机独立。未重建完整旋转惯性场。</p><label>平台读数极性<select id="polarity"><option value="1">标准浏览器约定</option><option value="-1">反向（实机校准）</option></select></label></details></section>
 <section><h2>预设加速度</h2><p class="fine" id="preset-note">仅真实传感器不可用时允许启用。</p><fieldset id="preset-controls"><label>方向<select id="direction">${options(["竖直向下", "竖直向上", "水平向左", "水平向右", "水平向前", "水平向后", "自定义方向"])}</select></label><div id="custom" hidden><label>X<input id="x" type="number" min="-1" max="1" step=".1" value="0"></label><label>Y<input id="y" type="number" min="-1" max="1" step=".1" value="-1"></label><label>Z<input id="z" type="number" min="-1" max="1" step=".1" value="0"></label></div><label class="range-label">幅值 <output id="magnitude-label">1.00 g</output><input id="magnitude" type="range" min="0" max="3" step=".01" value="1"></label><div class="pills">${[0, 0.5, 1, 2].map((n) => `<button data-g="${n}">${n}g</button>`).join("")}</div><button id="activate-preset" class="wide quiet">使用当前预设</button></fieldset></section>
 <section><h2>沙粒工坊</h2><div class="two-col"><label>颗粒外观<select id="shape">${options(["细砂", "粗砂", "晶体砂", "彩色颗粒砂"])}</select></label><label>颜色<select id="palette">${options(palettes)}</select></label></div><label>物理材料<select id="material">${options(["极细流动砂", "标准砂", "粗颗粒砂", "高摩擦晶体砂"])}</select></label><label>性能档位<select id="quality">${options(["省电 · 1,000 粒", "平衡 · 5,000 粒", "高质量 · 10,000 粒", "自定义"])}</select></label><label id="count-label" hidden>粒子数量<input id="count" type="number" min="100" max="20000" step="100" value="1000"></label><p class="fine" id="budget">启动实测正在选择安全预算。更改数量会重新分布；自动降级不删除沙粒。</p><div class="two-col"><button id="reset">重置沙漏</button><button id="restore" class="quiet">恢复初始分布</button></div></section>
-<details id="debug"><summary>传感器与性能监测 <span id="fps">— FPS</span></summary><pre id="debug-data"></pre><p class="fine">原始、变换、显示平滑与最终输入独立。绝对地球重力与完整设备运动未知。GPU 时间戳不可用，不以 CPU 提交时间冒充 GPU 耗时。</p><button id="benchmark">开始 60 秒渲染基准</button><button id="export" disabled>导出基准 JSON</button></details><label class="toggle"><input id="show-help" type="checkbox" checked>显示辅助信息</label><footer>无预设轨迹，无数据上传。<br>传感器需要 HTTPS 或 localhost。</footer></aside></main><div id="fatal" role="alert" hidden></div>`;
+<details id="debug"><summary>传感器与性能监测 <span id="fps">— FPS</span></summary><pre id="debug-data"></pre><p class="fine">原始、变换、显示平滑与最终输入独立。绝对地球重力与完整设备运动未知。GPU 时间戳可用时显示计算批次耗时；CPU 编码/提交独立计时，不冒充 GPU 耗时。FPS 仅统计实际绘制提交，不统计空转回调。</p><button id="benchmark">开始 60 秒渲染基准</button><button id="export" disabled>导出基准 JSON</button></details><label class="toggle"><input id="show-help" type="checkbox" checked>显示辅助信息</label><footer>无预设轨迹，无数据上传。<br>传感器需要 HTTPS 或 localhost。</footer></aside></main><div id="fatal" role="alert" hidden></div>`;
 const airLabel=document.createElement("label");
 airLabel.className="toggle";
 airLabel.innerHTML='<input id="air" type="checkbox" checked>细砂空气阻力（关闭为真空）';
 $("material").closest("label")!.after(airLabel);
 const airEnabled=()=>($("air") as HTMLInputElement).checked;
-const durationNote=document.createElement("p");
-durationNote.id="duration-estimate";durationNote.className="fine";
-airLabel.after(durationNote);
 ($("count") as HTMLInputElement).min="1000";
 $("quality").parentElement!.firstChild!.textContent="砂量与性能档位";
 const sensor = new SensorInput();
 const stage = $("viewport");
 let scene: SandScene;
-try {
-  scene = new SandScene(stage);
-} catch (error) {
-  $("fatal").hidden = false;
-  $("fatal").textContent =
-    `无法启动 WebGL：${String(error)}。请启用硬件加速或更换浏览器。`;
-  throw error;
-}
-const worker = new Worker(new URL("./physics.worker.ts", import.meta.url), {
-  type: "module",
-});
-void detectBackends(document.createElement("canvas")).then((result) => {
-  console.info("物理后端评估", result);
-});
+let worker: Worker | undefined;
+let gpuPhysics: GpuPhysics | undefined;
+let ready = false;
+let failed = false;
 let paused = false,
   pending = true,
   positions: Float32Array | undefined,
@@ -57,10 +45,6 @@ let last = performance.now(),
   active=0,
   sleeping=0,
   neighborChecks=0,
-  islands=0,
-  clustered=0,
-  bulkIntegrated=0,
-  islandSplits=0,
   substeps=0,
   neckRadius=0,
   steps = 0,
@@ -68,6 +52,8 @@ let last = performance.now(),
   previousStatsTime = performance.now(),
   dropped = 0,
   renderMs = 0,
+  lastRendered = performance.now(),
+  renderPending = false,
   frames: number[] = [],
   runStart = 0,
   benchmarkRows: unknown[] = [],
@@ -88,60 +74,120 @@ count = initialCount;
 ($("material") as HTMLSelectElement).value = String(material);
 $("magnitude").setAttribute("aria-label", "预设加速度幅值");
 const physicsControls = ["reset", "restore", "material", "air", "quality", "count"];
-for (const id of physicsControls)
-  ($(id) as HTMLButtonElement | HTMLSelectElement | HTMLInputElement).disabled =
-    true;
-worker.postMessage({ type: "calibrate" });
-worker.onmessage = (event: MessageEvent) => {
-  const data = event.data;
-  if (data.type === "calibrated") {
-    count = Math.min(initialCount, data.recommended);
-    ($("quality") as HTMLSelectElement).value = String(
-      count === 10000 ? 2 : count === 5000 ? 1 : 0,
-    );
-    console.info("启动物理实测", data.samples);
-    elapsedPending = 0;
-    worker.postMessage({ type: "init", count, material, air:airEnabled() });
-    return;
+const startupControls = [
+  ...physicsControls, "pause", "view", "shape", "palette", "benchmark",
+  "permission", "polarity", "preset-controls",
+];
+function setControls(enabled: boolean) {
+  for (const id of startupControls) {
+    ($(id) as HTMLButtonElement | HTMLSelectElement | HTMLInputElement | HTMLFieldSetElement).disabled =
+      !enabled;
   }
-  if (data.type === "error") {
-    $("fatal").hidden = false;
-    $("fatal").textContent = data.message;
-    pending = false;
-    paused = true;
-    $("pause").textContent = "继续模拟";
-    return;
-  }
-  if (!data.positions) return;
-  for (const id of physicsControls)
-    (
-      $(id) as HTMLButtonElement | HTMLSelectElement | HTMLInputElement
-    ).disabled = false;
-  positions = new Float32Array(data.positions);
-  if (data.radii) radii = new Float32Array(data.radii);
-  if (radii && (scene.count !== data.count || scene.radii !== radii))
-    scene.configure(data.count, radii, data.neckRadius);
-  scene.update(positions);
-  count = data.count;
-  workerMs = data.stats?.ms ?? 0;
-  contacts = data.stats?.contacts ?? 0;
-  steps = data.stats?.steps ?? 0;
-  dropped = data.stats?.dropped ?? 0;
-  active=data.stats?.active??data.count;
-  sleeping=data.stats?.sleeping??0;
-  neighborChecks=data.stats?.neighborChecks??0;
-  substeps=data.stats?.substeps??0;
-  islands=data.stats?.islands??0;
-  clustered=data.stats?.clustered??0;
-  bulkIntegrated=data.stats?.bulkIntegrated??0;
-  islandSplits=data.stats?.islandSplits??0;
-  neckRadius=data.neckRadius;
+  ($("preset-controls") as HTMLFieldSetElement).disabled =
+    !enabled || sensor.mode === "sensor";
+}
+setControls(false);
+
+function fail(error: unknown) {
+  failed = true;
+  ready = false;
   pending = false;
-};
-worker.onerror = (e) => {
+  paused = true;
+  setControls(false);
   $("fatal").hidden = false;
-  $("fatal").textContent = `物理线程错误：${e.message}`;
-};
+  const backend = scene?.backend === "webgpu" ? "WebGPU" : worker ? "CPU Worker" : "初始化";
+  $("fatal").textContent = `${backend} 模拟已停止：${error instanceof Error ? error.message : String(error)}`;
+  console.error("沙漏后端错误", error);
+}
+
+function receiveStats(stats: PhysicsStats) {
+  workerMs = stats.ms;
+  contacts = stats.contacts;
+  steps = stats.steps;
+  dropped = stats.dropped;
+  active = stats.active;
+  sleeping = stats.sleeping;
+  neighborChecks = stats.neighborChecks;
+  substeps = stats.substeps;
+}
+
+async function configureGpu(n: number) {
+  ready = false;
+  pending = true;
+  setControls(false);
+  // Rebuild only after every old draw/compute finishes using the shared buffer.
+  await scene.gpuDevice!.queue.onSubmittedWorkDone();
+  if (disposed || failed) return;
+  gpuPhysics?.dispose();
+  gpuPhysics = undefined;
+  const initial = new Physics(n, material, undefined, airEnabled() ? 1 : 0);
+  scene.configure(n, initial.radii, initial.neckRadius);
+  const buffer = scene.createGpuStorage();
+  gpuPhysics = await GpuPhysics.create(
+    scene.gpuDevice!, buffer, initial.positions, initial.radii,
+    initial.neckRadius, material, airEnabled(),
+  );
+  if (disposed || failed) {
+    gpuPhysics.dispose();
+    return;
+  }
+  count = n;
+  neckRadius = initial.neckRadius;
+  receiveStats(gpuPhysics.stats);
+  previousSteps = steps;
+  previousStatsTime = performance.now();
+  elapsedPending = 0;
+  last = performance.now();
+  lastRendered = last;
+  pending = false;
+  ready = true;
+  setControls(true);
+}
+
+function startCpuWorker() {
+  worker = new Worker(new URL("./physics.worker.ts", import.meta.url), {
+    type: "module",
+  });
+  worker.onmessage = (event: MessageEvent) => {
+    if (disposed || failed) return;
+    const data = event.data;
+    if (data.type === "calibrated") {
+      count = Math.min(initialCount, data.recommended);
+      ($("quality") as HTMLSelectElement).value = String(
+        count === 10000 ? 2 : count === 5000 ? 1 : 0,
+      );
+      console.info("启动 CPU 物理实测", data.samples);
+      elapsedPending = 0;
+      worker!.postMessage({ type: "init", count, material, air: airEnabled() });
+      return;
+    }
+    if (data.type === "error") {
+      fail(new Error(data.message));
+      return;
+    }
+    if (!data.positions) return;
+    positions = new Float32Array(data.positions);
+    if (data.radii) radii = new Float32Array(data.radii);
+    if (radii && (scene.count !== data.count || scene.radii !== radii))
+      scene.configure(data.count, radii, data.neckRadius);
+    scene.update(positions);
+    count = data.count;
+    receiveStats(data.stats);
+    neckRadius = data.neckRadius;
+    pending = false;
+    if (!ready) {
+      previousSteps = steps;
+      previousStatsTime = performance.now();
+      elapsedPending = 0;
+      last = performance.now();
+      lastRendered = last;
+      ready = true;
+      setControls(true);
+    }
+  };
+  worker.onerror = (event) => fail(new Error(`物理线程错误：${event.message}`));
+  worker.postMessage({ type: "calibrate" });
+}
 function preset() {
   const dirs = [
     [0, -1, 0],
@@ -192,13 +238,11 @@ $("pause").onclick = () => {
 };
 $("view").onclick = () => scene.resetView();
 $("reset").onclick = () => {
-  worker.postMessage({ type: "reset" });
-  $("fatal").hidden = true;
+  resetPhysics();
   scene.resetView();
 };
 $("restore").onclick = () => {
-  worker.postMessage({ type: "reset" });
-  $("fatal").hidden = true;
+  resetPhysics();
 };
 $("shape").onchange = () => {
   const shape = Number(($("shape") as HTMLSelectElement).value);
@@ -212,18 +256,37 @@ $("palette").onchange = () =>
   scene.setPalette(Number(($("palette") as HTMLSelectElement).value));
 $("material").onchange = () => {
   material = Number(($("material") as HTMLSelectElement).value);
-  worker.postMessage({ type: "material", material });
+  if (gpuPhysics) gpuPhysics.setMaterial(material);
+  else worker?.postMessage({ type: "material", material });
 };
-$("air").onchange=()=>worker.postMessage({type:"air",enabled:airEnabled()});
+$("air").onchange = () => {
+  if (gpuPhysics) gpuPhysics.setAirResistance(airEnabled());
+  else worker?.postMessage({ type: "air", enabled: airEnabled() });
+};
+function resetPhysics() {
+  if (!ready || failed) return;
+  if (gpuPhysics) {
+    gpuPhysics.reset();
+    receiveStats(gpuPhysics.stats);
+  } else worker?.postMessage({ type: "reset" });
+  previousSteps = 0;
+  previousStatsTime = performance.now();
+  elapsedPending = 0;
+}
 function changeCount(n: number) {
-  if (!Number.isFinite(n)) return;
+  // Disabling the focused input can synchronously emit a second native change.
+  if (!ready || failed || !Number.isFinite(n)) return;
   n = Math.min(20000, Math.max(1000, Math.round(n)));
+  if (n === count) return;
   ($("count") as HTMLInputElement).value=String(n);
+  ready = false;
   pending = true;
+  setControls(false);
   positions = undefined;
   radii = undefined;
   count = n;
-  worker.postMessage({ type: "init", count, material, air:airEnabled() });
+  if (scene.backend === "webgpu") void configureGpu(n).catch(fail);
+  else worker!.postMessage({ type: "init", count, material, air: airEnabled() });
 }
 $("quality").onchange = () => {
   startup = false;
@@ -284,7 +347,6 @@ $("export").onclick = () => {
 };
 function updateUi(now: number) {
   const a = sensor.acceleration;
-  $("duration-estimate").textContent=airEnabled()?`1g 标准砂粗估 ${(estimatedDurationSeconds(count)/60).toFixed(1)} 分钟；增加数量会增加砂量。不是精确计时器。`:"真空模式：不保证分钟级流动。";
   const physicsHz =
     (Math.max(0, steps - previousSteps) * 1000) /
     Math.max(1, now - previousStatsTime);
@@ -302,7 +364,7 @@ function updateUi(now: number) {
   $("sensor-detail").textContent = sensor.detail;
   $("status-dot").classList.toggle("live", sensor.mode === "sensor");
   ($("preset-controls") as HTMLFieldSetElement).disabled =
-    sensor.mode === "sensor";
+    !ready || sensor.mode === "sensor";
   $("preset-note").textContent =
     sensor.mode === "sensor"
       ? "真实数据有效：预设输入已锁定。"
@@ -319,7 +381,7 @@ function updateUi(now: number) {
     `M32 32L${32 + a[0] * scale} ${32 - a[1] * scale}`,
   );
   $("debug-data").textContent =
-    `计算后端     CPU / Web Worker · PBD 静摩擦
+    `计算后端     ${scene.backend === "webgpu" ? "WebGPU Compute / GPU 常驻粒子直渲染" : "CPU / Web Worker · PBD 静摩擦"}
 输入模式     ${sensor.mode}
 授权状态     ${sensor.status}
 最近有效数据 ${sensor.lastValid === null ? "无" : ((now - sensor.lastValid) / 1000).toFixed(2) + " 秒前"}
@@ -335,63 +397,94 @@ function updateUi(now: number) {
 累计物理步数 ${steps}
 模拟时间     ${(steps*FIXED_DT).toFixed(1)} s
 粒子数量     ${count}
-活跃 / 休眠  ${active} / ${sleeping}
-沙块 / 成员  ${islands} / ${clustered}
-整体积分量   ${bulkIntegrated} 成员粒子×子步
-沙块拆解数   ${islandSplits}
+活跃 / 休眠  ${gpuPhysics ? "GPU 常驻 / 未回读" : `${active} / ${sleeping}`}
 瓶颈内径     ${(neckRadius*2000).toFixed(2)} mm
 有效细砂直径 ${(MICRO_GRAIN_DIAMETER*1e6).toFixed(0)} µm（粗采样，非逐微粒DEM）
 空气模型     ${airEnabled()?"Stokes + 颈部 Darcy 有效闭合（非完整气体求解）":"真空 · 无空气阻力"}
-接触 / 邻居  ${contacts} / ${neighborChecks}
+接触 / 邻居  ${gpuPhysics ? "GPU 常驻 / 未回读" : `${contacts} / ${neighborChecks}`}
 最近子步数   ${substeps}
-物理 CPU     ${workerMs.toFixed(2)} ms
+${gpuPhysics ? "物理 CPU提交" : "物理 CPU"} ${workerMs.toFixed(2)} ms${gpuPhysics ? "（编码与提交，非GPU）" : ""}
 渲染 CPU提交 ${renderMs.toFixed(2)} ms（非GPU）
-GPU耗时      不可用
+GPU计算批次  ${gpuPhysics && Number.isFinite(gpuPhysics.stats.gpuMs) ? gpuPhysics.stats.gpuMs.toFixed(2) + " ms（最近完成批次，不含绘制）" : "时间戳不可用"}
 帧 P50/95/99 ${[0.5, 0.95, 0.99].map((p) => percentile(frames, p).toFixed(1)).join(" / ")} ms
 延迟/丢弃时间 ${dropped.toFixed(4)} s
+GPU积累时间  ${gpuPhysics ? gpuPhysics.backlogSeconds.toFixed(4) + " s（保留，未丢弃）" : "不适用"}
 物理状态内存 ≥${((count * 40) / 1024).toFixed(0)} KiB（估计）
 姿态信息     ${sensor.orientation ? JSON.stringify(sensor.orientation) : "未知"}
 旋转速率     ${sensor.rotation ? JSON.stringify(sensor.rotation) : "未知"}`;
 }
-function frame(now: number) {
+function frame() {
+  // rAF's cached frame timestamp can precede an asynchronous reset of `last`.
+  const now = performance.now();
   if (disposed) return;
   requestAnimationFrame(frame);
   const elapsed = (now - last) / 1000;
   last = now;
   if (document.hidden) return;
   sensor.tick(now);
-  elapsedPending += elapsed;
-  if (!pending) {
-    const buffer = positions?.buffer;
-    worker.postMessage(
-      {
-        type: "advance",
-        elapsed: elapsedPending,
-        acceleration: sensor.acceleration,
-        paused,
-        buffer,
-      },
-      buffer ? [buffer] : [],
-    );
-    elapsedPending = 0;
-    positions = undefined;
-    pending = true;
+  const canRender = ready && !failed && !renderPending && !gpuPhysics?.pending;
+  if (ready && !failed) {
+    if (gpuPhysics) {
+      try {
+        gpuPhysics.advance(elapsed, sensor.acceleration, paused);
+        receiveStats(gpuPhysics.stats);
+      } catch (error) {
+        fail(error);
+      }
+    } else {
+      elapsedPending += elapsed;
+      if (!pending) {
+        const buffer = positions?.buffer as ArrayBuffer | undefined;
+        worker!.postMessage(
+          {
+            type: "advance",
+            elapsed: elapsedPending,
+            acceleration: sensor.acceleration,
+            paused,
+            buffer,
+          },
+          buffer ? [buffer] : [],
+        );
+        elapsedPending = 0;
+        positions = undefined;
+        pending = true;
+      }
+    }
   }
   const start = performance.now();
-  scene.render();
-  renderMs = performance.now() - start;
-  const ms = elapsed * 1000;
-  frames.push(ms);
-  windowFrames.push(ms);
-  if (frames.length > 600) frames.shift();
+  let rendered = false;
+  try {
+    if (canRender && !failed) {
+      scene.render();
+      rendered = true;
+      if (scene.gpuDevice) {
+        renderPending = true;
+        void scene.gpuDevice.queue.onSubmittedWorkDone()
+          .catch(fail)
+          .finally(() => { renderPending = false; });
+      }
+    }
+  } catch (error) {
+    fail(error);
+  }
+  const ms = rendered ? now - lastRendered : 0;
+  if (rendered) {
+    renderMs = performance.now() - start;
+    lastRendered = now;
+    frames.push(ms);
+    windowFrames.push(ms);
+    if (frames.length > 600) frames.shift();
+  }
   if (now - lastUi > 200) {
     updateUi(now);
     lastUi = now;
   }
-  if (runStart) {
+  if (runStart && rendered) {
     benchmarkRows.push({
       frameMs: ms,
       physicsMs: workerMs,
+      physicsMsMeaning: gpuPhysics ? "CPU encode/submit only; not GPU duration" : "CPU worker duration",
+      gpuMs: gpuPhysics && Number.isFinite(gpuPhysics.stats.gpuMs) ? gpuPhysics.stats.gpuMs : null,
       renderSubmissionMs: renderMs,
       count,
       input: [...sensor.acceleration],
@@ -402,6 +495,7 @@ function frame(now: number) {
       neckRadius,
       steps,
       droppedSeconds: dropped,
+      backlogSeconds: gpuPhysics?.backlogSeconds ?? 0,
       mode: sensor.mode,
     });
     if (now - runStart >= 60000) {
@@ -409,7 +503,10 @@ function frame(now: number) {
       const times = rows.map((r) => r.frameMs);
       benchmarkResult = {
         userAgent: navigator.userAgent,
-        backend: "CPU Worker + WebGL2 instancing",
+        backend: gpuPhysics ? "WebGPU Compute + GPU storage instancing" : "CPU Worker + WebGL2 instancing",
+        physicsMsMeaning: gpuPhysics ? "CPU encode/submit only; not GPU duration" : "CPU worker duration",
+        frameMsMeaning: "Time between actual render submissions, not animation callbacks",
+        gpuMsMeaning: "Latest completed compute batch; excludes draw; not per fixed step",
         durationMs: now - runStart,
         count,
         averageFps: 1000 / (times.reduce((a, b) => a + b, 0) / times.length),
@@ -421,12 +518,13 @@ function frame(now: number) {
           0.95,
         ),
         droppedSeconds: dropped,
+        backlogSeconds: gpuPhysics?.backlogSeconds ?? 0,
         physicsSteps: steps,
         active,
         sleeping,
         neckRadius,
         estimatedStateBytes: count * 40,
-        gpuMs: null,
+        gpuMs: gpuPhysics && Number.isFinite(gpuPhysics.stats.gpuMs) ? gpuPhysics.stats.gpuMs : null,
         rows,
       };
       runStart = 0;
@@ -466,16 +564,50 @@ function frame(now: number) {
 }
 document.addEventListener("visibilitychange", () => {
   last = performance.now();
+  lastRendered = last;
   elapsedPending = 0;
   sensor.tick();
 });
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
   disposed = true;
-  worker.terminate();
+  worker?.terminate();
+  gpuPhysics?.dispose();
   sensor.dispose();
-  scene.dispose();
+  scene?.dispose();
 });
 sensor.start();
 preset();
-requestAnimationFrame(frame);
+async function initialize() {
+  try {
+    scene = await SandScene.create(stage);
+    if (disposed) {
+      scene.dispose();
+      return;
+    }
+    if (scene.gpuDevice) {
+      void scene.gpuDevice.lost.then((info) => {
+        if (!disposed) fail(new Error(`WebGPU 设备丢失（${info.reason}）：${info.message}`));
+      });
+      scene.gpuDevice.addEventListener("uncapturederror", (event) => {
+        if (!disposed) fail(new Error(`WebGPU：${event.error.message}`));
+      });
+      count = 5000;
+      ($("quality") as HTMLSelectElement).value = "1";
+      ($("count") as HTMLInputElement).value = String(count);
+      await configureGpu(count);
+    } else {
+      $("budget").textContent = "WebGPU 不可用；正在实测 CPU Worker 的安全粒子预算。";
+      startCpuWorker();
+    }
+    if (!disposed && !failed) {
+      last = performance.now();
+      lastRendered = last;
+      windowStart = last;
+      requestAnimationFrame(frame);
+    }
+  } catch (error) {
+    fail(error);
+  }
+}
+void initialize();

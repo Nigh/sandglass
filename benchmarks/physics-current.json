@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-10-28T08:48:58.814Z",
-  "backend": "CPU particle solver used by the browser Web Worker",
+  "generatedAt": "2026-10-28T12:13:58.589Z",
+  "backend": "CPU particle fallback solver used by the browser Web Worker",
   "benchmarkExecution": "Node main thread; worker transport and rendering are not measured",
-  "gpuBackend": "not implemented",
+  "gpuBackend": "not measured by this CPU-only benchmark",
   "renderAndGpuMetrics": null,
   "clock": "performance.now, milliseconds",
   "fixedDtSeconds": 0.008333333333333333,
@@ -14,242 +14,81 @@
   },
   "results": [
     {
-      "count": 1000,
-      "neckRadiusMetres": 0.010400000000000001,
-      "requestedWallSeconds": 2,
-      "actualWallSeconds": 2.000773701,
-      "simulatedSeconds": 1.7666666666666666,
-      "steps": 212,
-      "simulatedToWallRatio": 0.8829917475343038,
-      "solverMs": {
-        "total": 1994.2787379999997,
-        "mean": 9.406975179245283,
-        "p50": 8.503345999999965,
-        "p95": 17.152825000000007,
-        "p99": 24.381090999999998,
-        "max": 67.241298
-      },
-      "scenes": [
-        {
-          "name": "downward-pile",
-          "steps": 212,
-          "cpuMs": 1994.2787379999997,
-          "maxStepMs": 67.241298
-        },
-        {
-          "name": "zero-g",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "continuous-flip",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "high-magnitude",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "upward-pile",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        }
-      ],
-      "activity": {
-        "active": 1000,
-        "sleeping": 0,
-        "supportedActive": 0,
-        "meanActive": 1000,
-        "meanSleeping": 0,
-        "meanSupportedActive": 0,
-        "sleepingFraction": 0,
-        "neighborChecks": 48852039,
-        "meanNeighborChecksPerStep": 230434.1462264151,
-        "islands": 14,
-        "clustered": 121,
-        "bulkIntegrated": 54667,
-        "bulkPairSkips": 928922,
-        "islandSplits": 1245
-      },
-      "stability": {
-        "sampledStates": 17,
-        "nonFiniteComponents": 0,
-        "boundaryViolations": 0,
-        "radiusChanges": 0,
-        "conservedParticleCount": true,
-        "minimumWallClearanceMetres": 1.9159922017009112e-9,
-        "maximumSpeedMetresPerSecond": 0.0366061086032314,
-        "lastSampleUpperCount": 819,
-        "lastSampleLowerCount": 181,
-        "minimumUpperCount": 819,
-        "maximumUpperCount": 987,
-        "contacts": 4338328,
-        "droppedSeconds": 0
-      }
-    },
-    {
       "count": 5000,
-      "neckRadiusMetres": 0.00695489917175479,
-      "requestedWallSeconds": 2,
-      "actualWallSeconds": 2.031431732,
-      "simulatedSeconds": 0.4083333333333333,
-      "steps": 49,
-      "simulatedToWallRatio": 0.20100765726019154,
+      "neckRadiusMetres": 0.001575,
+      "requestedWallSeconds": 12,
+      "actualWallSeconds": 12.021697183,
+      "simulatedSeconds": 3.4916666666666667,
+      "steps": 419,
+      "simulatedToWallRatio": 0.29044706529492914,
       "solverMs": {
-        "total": 2028.689620999999,
-        "mean": 41.40182899999998,
-        "p50": 37.42144700000017,
-        "p95": 59.766239999999925,
-        "p99": 67.34968100000015,
-        "max": 72.79589099999976
+        "total": 12007.919836000023,
+        "mean": 28.65851989498812,
+        "p50": 22.035145,
+        "p95": 50.5224760000001,
+        "p99": 146.98124800000005,
+        "max": 154.85352599999987
+      },
+      "physicsBudgetAt60FpsMs": {
+        "mean": 57.31703978997624,
+        "p95": 101.0449520000002
       },
       "scenes": [
         {
           "name": "downward-pile",
-          "steps": 49,
-          "cpuMs": 2028.689620999999,
-          "maxStepMs": 72.79589099999976
+          "steps": 159,
+          "cpuMs": 3974.3610710000057,
+          "maxStepMs": 45.40043400000104
         },
         {
           "name": "zero-g",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
+          "steps": 125,
+          "cpuMs": 1995.915117,
+          "maxStepMs": 30.483310000000074
         },
         {
           "name": "continuous-flip",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
+          "steps": 72,
+          "cpuMs": 1998.5531389999987,
+          "maxStepMs": 38.24597799999992
         },
         {
           "name": "high-magnitude",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
+          "steps": 15,
+          "cpuMs": 2007.6290640000025,
+          "maxStepMs": 154.85352599999987
         },
         {
           "name": "upward-pile",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
+          "steps": 48,
+          "cpuMs": 2031.4614450000154,
+          "maxStepMs": 137.28880000000026
         }
       ],
       "activity": {
         "active": 5000,
         "sleeping": 0,
-        "supportedActive": 0,
+        "supportedActive": 141,
         "meanActive": 5000,
         "meanSleeping": 0,
-        "meanSupportedActive": 0,
+        "meanSupportedActive": 179.83770883054893,
         "sleepingFraction": 0,
-        "neighborChecks": 53770259,
-        "meanNeighborChecksPerStep": 1097352.224489796,
-        "islands": 21,
-        "clustered": 339,
-        "bulkIntegrated": 131337,
-        "bulkPairSkips": 2846654,
-        "islandSplits": 3148
+        "neighborChecks": 527460104,
+        "meanNeighborChecksPerStep": 1258854.663484487
       },
       "stability": {
-        "sampledStates": 4,
+        "sampledStates": 34,
         "nonFiniteComponents": 0,
         "boundaryViolations": 0,
         "radiusChanges": 0,
         "conservedParticleCount": true,
-        "minimumWallClearanceMetres": 2.6501820547114585e-8,
-        "maximumSpeedMetresPerSecond": 0.03562730501084211,
-        "lastSampleUpperCount": 4913,
-        "lastSampleLowerCount": 87,
-        "minimumUpperCount": 4913,
-        "maximumUpperCount": 4987,
-        "contacts": 1939773,
-        "droppedSeconds": 0
-      }
-    },
-    {
-      "count": 10000,
-      "neckRadiusMetres": 0.0069,
-      "requestedWallSeconds": 2,
-      "actualWallSeconds": 2.0814180110000007,
-      "simulatedSeconds": 0.23333333333333334,
-      "steps": 28,
-      "simulatedToWallRatio": 0.11210306247961706,
-      "solverMs": {
-        "total": 2079.014808,
-        "mean": 74.25052885714285,
-        "p50": 68.54570100000001,
-        "p95": 100.63795000000027,
-        "p99": 101.20487899999989,
-        "max": 116.29700099999991
-      },
-      "scenes": [
-        {
-          "name": "downward-pile",
-          "steps": 28,
-          "cpuMs": 2079.014808,
-          "maxStepMs": 116.29700099999991
-        },
-        {
-          "name": "zero-g",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "continuous-flip",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "high-magnitude",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        },
-        {
-          "name": "upward-pile",
-          "steps": 0,
-          "cpuMs": 0,
-          "maxStepMs": 0
-        }
-      ],
-      "activity": {
-        "active": 10000,
-        "sleeping": 0,
-        "supportedActive": 0,
-        "meanActive": 10000,
-        "meanSleeping": 0,
-        "meanSupportedActive": 0,
-        "sleepingFraction": 0,
-        "neighborChecks": 62404715,
-        "meanNeighborChecksPerStep": 2228739.8214285714,
-        "islands": 17,
-        "clustered": 422,
-        "bulkIntegrated": 190415,
-        "bulkPairSkips": 4989196,
-        "islandSplits": 3151
-      },
-      "stability": {
-        "sampledStates": 2,
-        "nonFiniteComponents": 0,
-        "boundaryViolations": 0,
-        "radiusChanges": 0,
-        "conservedParticleCount": true,
-        "minimumWallClearanceMetres": 9.063184812380803e-7,
-        "maximumSpeedMetresPerSecond": 0.03376887878945624,
-        "lastSampleUpperCount": 9934,
-        "lastSampleLowerCount": 66,
-        "minimumUpperCount": 9934,
-        "maximumUpperCount": 9979,
-        "contacts": 1049659,
+        "minimumWallClearanceMetres": -1.8386635963762998e-9,
+        "maximumSpeedMetresPerSecond": 0.2865042589581191,
+        "lastSampleUpperCount": 4562,
+        "lastSampleLowerCount": 438,
+        "minimumUpperCount": 4499,
+        "maximumUpperCount": 4977,
+        "contacts": 85040835,
         "droppedSeconds": 0
       }
     }

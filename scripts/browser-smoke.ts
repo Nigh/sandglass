@@ -7,17 +7,70 @@ declare global {
     allowMotion?: boolean;
     lastBenchmark?: unknown;
     motionTimer?: number;
+    testGpuDevice?: GPUDevice;
+    testGpuFrame?: unknown;
   }
 }
 const base = process.env.BASE_URL ?? "http://localhost:5177";
+const gpu = process.argv.includes("--gpu");
 const browser = await chromium.launch({
   headless: true,
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+  args: gpu
+    ? ["--use-angle=vulkan", "--enable-features=Vulkan", "--disable-vulkan-surface", "--ignore-gpu-blocklist", "--enable-unsafe-webgpu"]
+    : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const consoleErrors: string[] = [];
+page.on("console", (message) => {
+  if (message.type() === "error") consoleErrors.push(message.text());
+});
 const errors: string[] = [];
 page.on("pageerror", (e) => errors.push(e.message));
 // Literal script avoids tsx keepNames helpers crossing the browser execution boundary.
+if (gpu) {
+  await page.addInitScript({
+    content: `
+      window.__THREE_DEVTOOLS__ = new EventTarget();
+      window.__THREE_DEVTOOLS__.addEventListener("observe", event => {
+        const renderer = event.detail;
+        if (!renderer.isWebGPURenderer) return;
+        window.testGpuRenderer = renderer;
+        const render = renderer.render;
+        renderer.render = function (scene, camera) {
+          if (scene.children.some(child => child.isInstancedMesh)) {
+            window.testGpuFrame = { scene, camera };
+          }
+          return render.call(this, scene, camera);
+        };
+      });
+      const createBuffer = GPUDevice.prototype.createBuffer;
+      GPUDevice.prototype.createBuffer = function (descriptor) {
+        const buffer = createBuffer.call(this, descriptor);
+        if (descriptor.label === "GPU particle positions and radii") window.testGpuPositions = buffer;
+        return buffer;
+      };
+      const requestDevice = GPUAdapter.prototype.requestDevice;
+      GPUAdapter.prototype.requestDevice = async function (descriptor) {
+        const device = await requestDevice.call(this, descriptor);
+        window.testGpuDevice = device;
+        return device;
+      };
+      const create = GPUDevice.prototype.createComputePipelineAsync;
+      GPUDevice.prototype.createComputePipelineAsync = async function (descriptor) {
+        const pipeline = await create.call(this, descriptor);
+        const { promise, resolve } = Promise.withResolvers();
+        setTimeout(resolve, 1500);
+        await promise;
+        return pipeline;
+      };
+    `,
+  });
+} else {
+  // Exercise the real compatibility path, even when software WebGPU is available.
+  await page.addInitScript({
+    content: 'Object.defineProperty(navigator, "gpu", { configurable: true, value: undefined });',
+  });
+}
 await page.addInitScript({
   content: `
   window.addEventListener("devicemotion",event=>{if(event.isTrusted)event.stopImmediatePropagation();},true);
@@ -39,6 +92,114 @@ for (const id of ["reset", "restore", "material", "quality", "count"])
 await page.waitForFunction(
   () => !(document.querySelector("#material") as HTMLSelectElement).disabled,
 );
+await page.waitForFunction(
+  (expected) => document.querySelector("#debug-data")?.textContent?.includes(expected),
+  gpu ? "WebGPU Compute" : "CPU / Web Worker",
+);
+if (gpu) {
+  await page.waitForFunction(() => Boolean(window.testGpuFrame));
+  await page.locator("#pause").click();
+  // Explicit test-only target readback proves geometry, not just a live canvas.
+  const pixels = await page.evaluate(`(async () => {
+    const renderer = window.testGpuRenderer;
+    const { scene, camera } = window.testGpuFrame;
+    const mesh = scene.children.find(child => child.isInstancedMesh);
+    const target = renderer._frameBufferTarget.clone();
+    target.setSize(256, 256);
+    const previousTarget = renderer.getRenderTarget();
+    const visibility = scene.children.map(child => child.visible);
+    const originalCount = mesh.count;
+    const device = renderer.backend.device;
+    await device.queue.onSubmittedWorkDone();
+    const positions = window.testGpuPositions;
+    const backup = device.createBuffer({
+      size: 32, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    const save = device.createCommandEncoder();
+    save.copyBufferToBuffer(positions, 0, backup, 0, 32);
+    device.queue.submit([save.finish()]);
+    const difference = (a, b) => {
+      let changed = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        if (a[i] !== b[i] || a[i + 1] !== b[i + 1] ||
+            a[i + 2] !== b[i + 2] || a[i + 3] !== b[i + 3]) changed++;
+      }
+      return changed;
+    };
+    try {
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+      const full = await renderer.readRenderTargetPixelsAsync(target, 0, 0, 256, 256);
+      mesh.visible = false;
+      renderer.render(scene, camera);
+      const vessel = await renderer.readRenderTargetPixelsAsync(target, 0, 0, 256, 256);
+      for (const child of scene.children) if (child.isMesh) child.visible = false;
+      renderer.render(scene, camera);
+      const blank = await renderer.readRenderTargetPixelsAsync(target, 0, 0, 256, 256);
+      // Instance 1 used to rotate this nonzero world center around the origin.
+      const centers = [[-0.014, 0.025, -0.005], [0.016, -0.020, 0.006]];
+      const grains = new Float32Array(8);
+      centers.forEach((center, index) => {
+        grains.set(center, index * 4);
+        grains[index * 4 + 3] = 0.0015;
+      });
+      device.queue.writeBuffer(positions, 0, grains);
+      mesh.count = 2;
+      mesh.visible = true;
+      renderer.render(scene, camera);
+      const twoGrains = await renderer.readRenderTargetPixelsAsync(target, 0, 0, 256, 256);
+      const projected = centers.map(center => {
+        const point = mesh.position.clone().set(...center).project(camera);
+        return [(point.x + 1) * 128, (1 - point.y) * 128];
+      });
+      const centerHits = [0, 0];
+      let misplacedPixels = 0;
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+        const offset = (y * 256 + x) * 4;
+        if (twoGrains[offset] === blank[offset] && twoGrains[offset + 1] === blank[offset + 1] &&
+            twoGrains[offset + 2] === blank[offset + 2] && twoGrains[offset + 3] === blank[offset + 3]) continue;
+        let expected = false;
+        projected.forEach(([cx, cy], index) => {
+          if (Math.abs(x + 0.5 - cx) < 8 && Math.abs(y + 0.5 - cy) < 8) {
+            centerHits[index]++;
+            expected = true;
+          }
+        });
+        if (!expected) misplacedPixels++;
+      }
+      return {
+        geometryPixels: difference(full, blank),
+        particlePixels: difference(full, vessel),
+        vesselPixels: difference(vessel, blank),
+        centerHits,
+        misplacedPixels,
+        projected,
+      };
+    } finally {
+      const restore = device.createCommandEncoder();
+      restore.copyBufferToBuffer(backup, 0, positions, 0, 32);
+      device.queue.submit([restore.finish()]);
+      backup.destroy();
+      mesh.count = originalCount;
+      scene.children.forEach((child, index) => { child.visible = visibility[index]; });
+      renderer.setRenderTarget(previousTarget);
+      target.dispose();
+    }
+  })()`) as {
+    geometryPixels: number;
+    particlePixels: number;
+    vesselPixels: number;
+    centerHits: number[];
+    misplacedPixels: number;
+    projected: number[][];
+  };
+  assert.ok(pixels.geometryPixels > 100 && pixels.vesselPixels > 100, JSON.stringify(pixels));
+  assert.ok(pixels.particlePixels > 10, JSON.stringify(pixels));
+  assert.ok(pixels.centerHits.every(hits => hits > 3), JSON.stringify(pixels));
+  assert.equal(pixels.misplacedPixels, 0, "Grain pixels must surround projected GPU centers, not the origin");
+  console.log("GPU 实际目标像素与中心变换验收", pixels);
+  await page.locator("#pause").click();
+}
 await page.waitForFunction(() =>
   document.querySelector("#sensor-status")?.textContent?.includes("拒绝"),
 );
@@ -91,7 +252,42 @@ await page.locator("#activate-preset").click();
 await page.waitForFunction(
   () => document.querySelector("#mode")?.textContent === "预设加速度",
 );
+await page.selectOption("#material", "2");
+await page.locator("#air").uncheck();
+await page.waitForFunction(() =>
+  document.querySelector("#debug-data")?.textContent?.includes("真空 · 无空气阻力"),
+);
+await page.locator("#air").check();
+await page.selectOption("#material", "1");
+await page.locator("#pause").click();
+await page.locator("#reset").click();
+await page.waitForFunction(() =>
+  /累计物理步数\s+0\b/.test(document.querySelector("#debug-data")?.textContent ?? ""),
+);
+assert.equal(await page.locator("#pause").textContent(), "继续模拟");
+await page.selectOption("#quality", "3");
+await page.locator("#count").fill("1500");
+await page.locator("#count").dispatchEvent("change");
+try {
+  await page.waitForFunction(() =>
+    /粒子数量\s+1500\b/.test(document.querySelector("#debug-data")?.textContent ?? "") &&
+    !(document.querySelector("#pause") as HTMLButtonElement).disabled,
+  );
+  // A late blur can repeat the same change after asynchronous initialization.
+  await page.locator("#count").dispatchEvent("change");
+  assert.equal(await page.locator("#pause").isDisabled(), false);
+  await page.locator("#pause").click();
+} catch (error) {
+  console.error("数量重建诊断", JSON.stringify({
+    fatal: await page.locator("#fatal").textContent(),
+    debug: await page.locator("#debug-data").textContent(),
+    consoleErrors,
+  }));
+  throw error;
+}
 await page.selectOption("#quality", "0");
+await page.selectOption("#shape", "3");
+assert.equal(await page.locator("#palette").inputValue(), "5");
 await page.selectOption("#palette", "3");
 await page.selectOption("#shape", "2");
 await mkdir("benchmarks", { recursive: true });
@@ -106,7 +302,7 @@ await page.screenshot({ path: "benchmarks/mobile.png", fullPage: true });
 assert.equal(await page.locator("#fatal").isVisible(), false);
 assert.deepEqual(errors, []);
 console.log(
-  "浏览器验收通过：权限拒绝/恢复、真实输入互斥、2g/0g、过期故障、显式预设、暂停、外观切换与手机布局。",
+  `浏览器验收通过（${gpu ? "WebGPU" : "CPU Worker"}）：启动锁定、传感器互斥、2g/0g、故障与预设、暂停重置、数量重建、材料/空气、外观与手机布局。`,
 );
 if (process.argv.includes("--degradation")) {
   await page.waitForFunction(
@@ -183,18 +379,20 @@ if (process.argv.includes("--benchmark")) {
       ),
     );
   }
-  const renderer = await page.evaluate(() => {
+  const renderer = await page.evaluate(async (useGpu) => {
+    if (useGpu) {
+      const adapter = await navigator.gpu.requestAdapter();
+      return adapter ? JSON.stringify(adapter.info) : "WebGPU adapter unavailable";
+    }
     const gl = document.querySelector("canvas")!.getContext("webgl2")!;
-    const e = gl.getExtension("WEBGL_debug_renderer_info");
-    return e
-      ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL)
-      : gl.getParameter(gl.RENDERER);
-  });
+    const extension = gl.getExtension("WEBGL_debug_renderer_info");
+    return extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  }, gpu);
   await writeFile(
     "benchmarks/browser.json",
     JSON.stringify(
       {
-        environment: "桌面无头 Chromium；软件 GPU；不代表手机性能",
+        environment: gpu ? "桌面无头 Chromium / WebGPU；硬件以 renderer 为准" : "桌面无头 Chromium；软件 WebGL；不代表手机性能",
         renderer,
         results,
       },
@@ -202,5 +400,15 @@ if (process.argv.includes("--benchmark")) {
       2,
     ),
   );
+}
+if (gpu) {
+  await page.evaluate(() => window.testGpuDevice!.destroy());
+  await page.waitForFunction(() =>
+    document.querySelector("#fatal")?.textContent?.includes("WebGPU"),
+  );
+  assert.equal(await page.locator("#fatal").isVisible(), true);
+  assert.equal(await page.locator("#material").isDisabled(), true);
+  assert.deepEqual(errors, []);
+  console.log("GPU 设备丢失显式报错，未冒充 CPU 回退。");
 }
 await browser.close();

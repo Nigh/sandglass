@@ -1,0 +1,47 @@
+{
+  "adapter": {
+    "vendor": "nvidia",
+    "architecture": "blackwell",
+    "isFallbackAdapter": false
+  },
+  "count": 5000,
+  "gravitySteps": 360,
+  "initialTopFraction": 0.5384818420658798,
+  "samples": [
+    {
+      "time": 0,
+      "lower": 0,
+      "nonFinite": 0,
+      "boundaryViolations": 0,
+      "maxOverlapFraction": 0,
+      "gpuBatchMs": null
+    },
+    {
+      "time": 1,
+      "lower": 119,
+      "nonFinite": 0,
+      "boundaryViolations": 0,
+      "maxOverlapFraction": 0.26453352655263224,
+      "gpuBatchMs": 6.711648
+    },
+    {
+      "time": 2,
+      "lower": 210,
+      "nonFinite": 0,
+      "boundaryViolations": 0,
+      "maxOverlapFraction": 0.248185346196904,
+      "gpuBatchMs": 4.14544
+    },
+    {
+      "time": 3,
+      "lower": 305,
+      "nonFinite": 0,
+      "boundaryViolations": 0,
+      "maxOverlapFraction": 0.21087639827520077,
+      "gpuBatchMs": 5.121984
+    }
+  ],
+  "upwardMean": 0.04222245647832751,
+  "initialMean": 0.01673057129950033,
+  "errors": []
+}

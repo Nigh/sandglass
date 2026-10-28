@@ -33,21 +33,13 @@ export interface PhysicsStats {
   neighborChecks: number;
   /** Fixed solver substeps, not per-particle wall sweep segments. */
   substeps: number;
-  /** Current free-translation or supported sleeping components (not rigid bodies). */
-  islands: number;
-  /** Members of current components; moving members remain included in active. */
-  clustered: number;
-  /** Particle substeps advanced using one shared velocity update per component. */
-  bulkIntegrated: number;
-  /** Directed internal grid candidates bypassed during swept-contact certification. */
-  bulkPairSkips: number;
-  /** Components refined back to particles during this step/advance. */
-  islandSplits: number;
 }
 
 const MAX_CATCH_UP_STEPS = 8;
-const SUBSTEP = FIXED_DT / 2;
-const ITERATIONS = 5;
+// Smaller steps reduce contact error more effectively than repeated large-step
+// projections: https://mmacklin.com/smallsteps.pdf (sections 4.2 and 6).
+const SUBSTEP = FIXED_DT / 4;
+const CONTACT_ITERATIONS = 5;
 const MAX_WALL_SLICES = 512;
 const SLEEP_SECONDS = 0.35;
 const SLEEP_SPEED = 0.012;
@@ -71,7 +63,6 @@ export class Physics {
   readonly stats: PhysicsStats = {
     ms: 0, contacts: 0, steps: 0, dropped: 0,
     active: 0, sleeping: 0, supportedActive: 0, neighborChecks: 0, substeps: 0,
-    islands: 0, clustered: 0, bulkIntegrated: 0, bulkPairSkips: 0, islandSplits: 0,
   };
   private readonly inverseMass: Float32Array;
   private readonly previous: Float32Array;
@@ -84,11 +75,24 @@ export class Physics {
   private readonly largest: number;
   private readonly smallest: number;
   private readonly diameter: number;
+  private readonly cellSize: number;
+  private readonly pairSkin: number;
+  private readonly pairReference: Float32Array;
+  private pairA: Int32Array;
+  private pairB: Int32Array;
+  private pairCount = 0;
+  private pairActiveCount = 0;
+  private readonly wallNormals: Float32Array;
+  private readonly wallY: Float64Array;
+  private readonly wallRadius: Float64Array;
+  private readonly wallSlope: Float64Array;
+  private readonly wallLength: Float64Array;
   private readonly nx: number;
   private readonly ny: number;
-  private readonly heads: Int32Array;
-  private readonly next: Int32Array;
-  private readonly previousInCell: Int32Array;
+  private readonly cellCounts: Int32Array;
+  private readonly cellOffsets: Int32Array;
+  private readonly cellCursor: Int32Array;
+  private readonly sorted: Int32Array;
   private readonly cells: Int32Array;
   private readonly active: Int32Array;
   private readonly activeIndex: Int32Array;
@@ -103,14 +107,6 @@ export class Physics {
   private readonly supportAlignment: Float32Array;
   private readonly grounded: Uint8Array;
   private readonly supportPath: Int32Array;
-  private readonly islandOf: Int32Array;
-  private readonly islandNext: Int32Array;
-  private readonly islandSize: Int32Array;
-  private readonly islandReference: Float32Array;
-  private readonly mergeParent: Int32Array;
-  private readonly mergeSize: Uint32Array;
-  private readonly mergeEligible: Uint8Array;
-  private readonly mergeBlocked: Uint8Array;
   private accumulator = 0;
   private wakeAx = 0;
   private wakeAy = 0;
@@ -120,7 +116,6 @@ export class Physics {
   private gz = 0;
   private gravity = 0;
   private stabilizing = false;
-  private airDecay = 1;
   private ambientResistance = 0;
   private wallSupportCos=1;
   private capSupportCos=1;
@@ -162,11 +157,24 @@ export class Physics {
     this.largest = largest;
     this.smallest = smallest;
     this.diameter = largest * 2;
-    this.nx = Math.ceil(2 * MAX_RADIUS / this.diameter) + 3;
-    this.ny = Math.ceil(2 * HALF_HEIGHT / this.diameter) + 3;
-    this.heads = new Int32Array(this.nx * this.ny * this.nx);
-    this.next = new Int32Array(count);
-    this.previousInCell = new Int32Array(count);
+    this.pairSkin = this.diameter * 0.25;
+    this.cellSize = this.diameter + this.pairSkin;
+    this.pairReference = new Float32Array(count * 3);
+    this.pairA = new Int32Array(count * 48);
+    this.pairB = new Int32Array(count * 48);
+    this.wallNormals = new Float32Array(count * 3);
+    this.wallY = new Float64Array(count);
+    this.wallY.fill(NaN);
+    this.wallRadius = new Float64Array(count);
+    this.wallSlope = new Float64Array(count);
+    this.wallLength = new Float64Array(count);
+    this.nx = Math.ceil(2 * MAX_RADIUS / this.cellSize) + 3;
+    this.ny = Math.ceil(2 * HALF_HEIGHT / this.cellSize) + 3;
+    const gridCells = this.nx * this.ny * this.nx;
+    this.cellCounts = new Int32Array(gridCells);
+    this.cellOffsets = new Int32Array(gridCells + 1);
+    this.cellCursor = new Int32Array(gridCells);
+    this.sorted = new Int32Array(count);
     this.cells = new Int32Array(count);
     this.active = new Int32Array(count);
     this.activeIndex = new Int32Array(count);
@@ -180,14 +188,6 @@ export class Physics {
     this.supportAlignment = new Float32Array(count);
     this.grounded = new Uint8Array(count);
     this.supportPath = new Int32Array(count);
-    this.islandOf = new Int32Array(count);
-    this.islandNext = new Int32Array(count);
-    this.islandSize = new Int32Array(count);
-    this.islandReference = new Float32Array(count * 3);
-    this.mergeParent = new Int32Array(count);
-    this.mergeSize = new Uint32Array(count);
-    this.mergeEligible = new Uint8Array(count);
-    this.mergeBlocked = new Uint8Array(count);
     this.setMaterial(material);
     this.reset();
   }
@@ -198,35 +198,30 @@ export class Physics {
     this.contactCount.fill(0);
     this.support.fill(NONE);
     this.grounded.fill(0);
-    this.heads.fill(NONE);
-    this.cells.fill(NONE);
-    this.next.fill(NONE);
-    this.previousInCell.fill(NONE);
-    this.islandOf.fill(NONE);
-    this.islandNext.fill(NONE);
-    this.islandSize.fill(0);
     this.accumulator = 0;
     this.wakeAx = this.wakeAy = this.wakeAz = 0;
     this.stats.ms = this.stats.contacts = this.stats.steps = this.stats.dropped = 0;
     this.stats.neighborChecks = this.stats.substeps = this.stats.sleeping = 0;
     this.stats.supportedActive = 0;
-    this.stats.islands = this.stats.clustered = this.stats.bulkIntegrated = 0;
-    this.stats.bulkPairSkips = this.stats.islandSplits = 0;
     this.activeCount = this.count;
-    const spacing = this.diameter * 1.04;
-    const width = Math.ceil(MAX_RADIUS / spacing);
+    this.pairActiveCount = -1;
+    const spacing = this.diameter * 1.01;
+    const rowSpacing = spacing * Math.sqrt(3) / 2;
+    const layerSpacing = spacing * Math.sqrt(2 / 3);
     let grain = 0;
     let layer = 0;
-    // Fill the upper funnel from the throat, not a levitating partial ceiling sheet.
-    for (let y = this.largest + 1e-5; y < HALF_HEIGHT-this.largest && grain < this.count; y += spacing, layer++) {
+    // Non-overlapping close-packed layers fill from the throat, with no suspended ceiling sheet.
+    for (let y = this.largest + 1e-5; y < HALF_HEIGHT - this.largest && grain < this.count; y += layerSpacing, layer++) {
       const slope = slopeAt(y, this.neckRadius);
       const limit = radiusAt(y, this.neckRadius) - this.largest * Math.sqrt(1 + slope * slope) - 1e-5;
+      if (limit < 0) continue;
+      const width = Math.ceil(limit / rowSpacing) + 1;
       const offset = (layer % 2) * 0.5;
       for (let iz = -width; iz <= width && grain < this.count; iz++) {
-        const z = (iz + offset) * spacing;
+        const z = iz * rowSpacing + offset * spacing / Math.sqrt(3);
         for (let ix = -width; ix <= width && grain < this.count; ix++) {
-          const x = (ix + offset) * spacing;
-          if (limit < 0 || x * x + z * z > limit * limit) continue;
+          const x = (ix + (iz & 1) * 0.5 + offset) * spacing;
+          if (x * x + z * z > limit * limit) continue;
           const k = grain++ * 3;
           this.positions[k] = x;
           this.positions[k + 1] = y;
@@ -237,7 +232,6 @@ export class Physics {
     if (grain !== this.count) throw new Error("Initial grain volume exceeds the upper chamber");
     for (let i = 0; i < this.count; i++) {
       this.active[i] = this.activeIndex[i] = i;
-      this.updateCell(i);
     }
     this.previous.set(this.positions);
     this.sleepAnchor.set(this.positions);
@@ -290,7 +284,6 @@ export class Physics {
 
   private clearWorkStats(): void {
     this.stats.contacts = this.stats.neighborChecks = this.stats.substeps = 0;
-    this.stats.bulkIntegrated = this.stats.bulkPairSkips = this.stats.islandSplits = 0;
   }
 
   private validateAcceleration(a: readonly number[]): void {
@@ -301,11 +294,7 @@ export class Physics {
   private wake(i: number): void {
     this.sleepTime[i] = 0;
     if (this.activeIndex[i] !== NONE) return;
-    const island = this.islandOf[i];
-    if (island !== NONE) {
-      this.splitIsland(island, true);
-      return;
-    }
+    this.pairActiveCount = -1;
     this.activeIndex[i] = this.activeCount;
     this.active[this.activeCount++] = i;
     this.stats.active = this.activeCount;
@@ -322,269 +311,6 @@ export class Physics {
     return Math.abs(this.positions[i * 3 + 1]) <= 2 * this.neckRadius;
   }
 
-  private splitIsland(root: number, wake: boolean): void {
-    if (this.islandSize[root] === 0) return;
-    this.stats.islands--;
-    this.stats.clustered -= this.islandSize[root];
-    this.islandSize[root] = 0;
-    this.stats.islandSplits++;
-    for (let i = root; i !== NONE; i = this.islandNext[i]) this.islandOf[i] = NONE;
-    for (let i = root; i !== NONE;) {
-      const next = this.islandNext[i];
-      this.islandOf[i] = NONE;
-      this.islandNext[i] = NONE;
-      if (wake) this.wake(i);
-      i = next;
-    }
-  }
-
-  /** Keep exposed sleepers individual. Six occupied axial sectors identify
-   * buried samples; a separate 64-member cap bounds impact-triggered wake work.
-   */
-  private sleepInterior(i: number): boolean {
-    const p = this.positions;
-    const k = i * 3;
-    const cell = this.cells[i];
-    const plane = this.nx * this.ny;
-    let sectors = 0;
-    for (let z = -1; z <= 1; z++) for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++)
-      for (let j = this.heads[cell + x + this.nx * y + plane * z]; j !== NONE; j = this.next[j]) {
-        if (j === i || this.activeIndex[j] !== NONE) continue;
-        const b = j * 3;
-        const dx = p[b] - p[k], dy = p[b + 1] - p[k + 1], dz = p[b + 2] - p[k + 2];
-        if (dx * dx + dy * dy + dz * dz > (this.diameter * 1.08) ** 2) continue;
-        if (Math.abs(dx) >= Math.abs(dy) && Math.abs(dx) >= Math.abs(dz)) sectors |= dx > 0 ? 1 : 2;
-        else if (Math.abs(dy) >= Math.abs(dz)) sectors |= dy > 0 ? 4 : 8;
-        else sectors |= dz > 0 ? 16 : 32;
-        if (sectors === 63) return true;
-      }
-    return false;
-  }
-
-  /** Certify the swept sphere against the analytic profile, not just its endpoint.
-   * The global derivative bound also covers the wall solver's normal-distance test.
-   */
-  private freeSweep(i: number, vx: number, vy: number, vz: number, h: number): boolean {
-    if (this.inDragRegion(i)) return false;
-    const k = i * 3;
-    const p = this.positions;
-    const x = p[k] + vx * h;
-    const y = p[k + 1] + vy * h;
-    const z = p[k + 2] + vz * h;
-    const radius = this.radii[i] + this.smallest * 0.08;
-    if (Math.max(Math.abs(p[k + 1]), Math.abs(y)) + radius >= HALF_HEIGHT) return false;
-    if (Math.min(Math.abs(p[k + 1]), Math.abs(y)) <= 2 * this.neckRadius ||
-      p[k + 1] * y < 0) return false;
-    const nearY = Math.abs(p[k + 1]) < Math.abs(y) ? p[k + 1] : y;
-    const slopeBound = (MAX_RADIUS - this.neckRadius) * Math.PI / (2 * HALF_HEIGHT);
-    const rho = Math.max(Math.hypot(p[k], p[k + 2]), Math.hypot(x, z));
-    return rho + radius * Math.sqrt(1 + slopeBound * slopeBound) <
-      radiusAt(nearY, this.neckRadius);
-  }
-
-  private mergeRoot(i: number): number {
-    let root = i;
-    while (this.mergeParent[root] !== root) root = this.mergeParent[root];
-    while (i !== root) {
-      const next = this.mergeParent[i];
-      this.mergeParent[i] = root;
-      i = next;
-    }
-    return root;
-  }
-
-  /** Conservative translational subset of adaptive model reduction:
-   * https://arxiv.org/abs/1510.01507 . No velocity averaging, rotation, or bonds.
-   * Supported sleeping components follow https://box2d.org/posts/2023/10/simulation-islands/ .
-   */
-  private prepareIslands(ax: number, ay: number, az: number, h: number): void {
-    const p = this.positions;
-    const v = this.velocities;
-    for (let root = 0; root < this.count; root++) {
-      if (this.islandSize[root] === 0) continue;
-      const moving = this.activeIndex[root] !== NONE;
-      const a = root * 3;
-      const vx = Math.fround(Math.fround(v[a] + ax * h) * this.airDecay);
-      const vy = Math.fround(Math.fround(v[a + 1] + ay * h) * this.airDecay);
-      const vz = Math.fround(Math.fround(v[a + 2] + az * h) * this.airDecay);
-      for (let i = root; i !== NONE; i = this.islandNext[i]) {
-        const k = i * 3;
-        if (this.inDragRegion(i) || (this.activeIndex[i] !== NONE) !== moving ||
-          p[k] !== this.islandReference[k] || p[k + 1] !== this.islandReference[k + 1] ||
-          p[k + 2] !== this.islandReference[k + 2] ||
-          v[k] !== v[a] || v[k + 1] !== v[a + 1] || v[k + 2] !== v[a + 2] ||
-          (moving && !this.freeSweep(i, vx, vy, vz, h))) {
-          this.splitIsland(root, !moving);
-          break;
-        }
-      }
-    }
-    this.mergeBlocked.fill(0);
-    for (let i = 0; i < this.count; i++) {
-      this.mergeParent[i] = i;
-      this.mergeSize[i] = 1;
-      const k = i * 3;
-      this.mergeEligible[i] = this.islandOf[i] === NONE && !this.inDragRegion(i) &&
-        (this.activeIndex[i] === NONE ? this.sleepInterior(i) :
-          this.freeSweep(i, Math.fround(Math.fround(v[k] + ax * h) * this.airDecay),
-            Math.fround(Math.fround(v[k + 1] + ay * h) * this.airDecay), Math.fround(Math.fround(v[k + 2] + az * h) * this.airDecay), h)) ? 1 : 0;
-    }
-    const plane = this.nx * this.ny;
-    for (let i = 0; i < this.count; i++) {
-      if (!this.mergeEligible[i]) continue;
-      const a = i * 3;
-      const cell = this.cells[i];
-      for (let z = -1; z <= 1; z++) for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) {
-        for (let j = this.heads[cell + x + this.nx * y + plane * z]; j !== NONE; j = this.next[j]) {
-          if (j <= i || !this.mergeEligible[j] ||
-            (this.activeIndex[i] === NONE) !== (this.activeIndex[j] === NONE)) continue;
-          const b = j * 3;
-          if (v[a] !== v[b] || v[a + 1] !== v[b + 1] || v[a + 2] !== v[b + 2]) continue;
-          this.stats.neighborChecks++;
-          const distance = Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]);
-          const limit = this.radii[i] + this.radii[j];
-          if (distance > this.diameter * 1.08) continue;
-          let left = this.mergeRoot(i);
-          let right = this.mergeRoot(j);
-          if (left > right) {
-            const swap = left;
-            left = right;
-            right = swap;
-          }
-          if (left !== right && this.activeIndex[i] === NONE &&
-            this.mergeSize[left] + this.mergeSize[right] > 64) continue;
-          if (left !== right) {
-            this.mergeParent[right] = left;
-            this.mergeSize[left] += this.mergeSize[right];
-            this.mergeBlocked[left] |= this.mergeBlocked[right];
-          }
-          // Never hide an existing penetration inside a reduced component.
-          if (this.activeIndex[i] !== NONE && distance < limit - this.smallest * 1e-5)
-            this.mergeBlocked[left] = 1;
-        }
-      }
-    }
-    for (let i = 0; i < this.count; i++) {
-      if (!this.mergeEligible[i]) continue;
-      const root = this.mergeRoot(i);
-      if (this.mergeBlocked[root]) continue;
-      this.islandOf[i] = root;
-      if (i === root) {
-        this.stats.islands++;
-        this.islandNext[i] = NONE;
-      } else {
-        this.islandNext[i] = this.islandNext[root];
-        this.islandNext[root] = i;
-      }
-      this.islandSize[root]++;
-      this.stats.clustered++;
-      const k = i * 3;
-      for (let axis = 0; axis < 3; axis++) this.islandReference[k + axis] = p[k + axis];
-    }
-    for (let root = 0; root < this.count; root++) {
-      if (this.islandSize[root] === 1) {
-        this.stats.islands--;
-        this.stats.clustered--;
-        this.islandSize[root] = 0;
-        this.islandOf[root] = NONE;
-      } else if (this.islandSize[root] > 1 && this.activeIndex[root] !== NONE &&
-        this.externalSweep(root, ax, ay, az, h)) this.splitIsland(root, false);
-    }
-  }
-
-  /** External swept spheres are tested once, before any member is advanced.
-   * Internal member pairs never enter the PBD solver. The persistent grid supplies
-   * the surface candidates; late contacts still split during ordinary PBD passes.
-   */
-  private externalSweep(root: number, ax: number, ay: number, az: number, h: number): boolean {
-    const p = this.positions;
-    const v = this.velocities;
-    const a = root * 3;
-    const vx = Math.fround(Math.fround(v[a] + ax * h) * this.airDecay);
-    const vy = Math.fround(Math.fround(v[a + 1] + ay * h) * this.airDecay);
-    const vz = Math.fround(Math.fround(v[a + 2] + az * h) * this.airDecay);
-    let reach = 0;
-    for (let j = 0; j < this.count; j++) {
-      if (this.islandOf[j] === root) continue;
-      const b = j * 3;
-      const moving = this.activeIndex[j] !== NONE;
-      const ux = moving ? Math.fround(Math.fround(v[b] + ax * h) * this.airDecay) : 0;
-      const uy = moving ? Math.fround(Math.fround(v[b + 1] + ay * h) * this.airDecay) : 0;
-      const uz = moving ? Math.fround(Math.fround(v[b + 2] + az * h) * this.airDecay) : 0;
-      reach = Math.max(reach, Math.hypot(ux - vx, uy - vy, uz - vz) * h);
-      if (moving && this.inDragRegion(j) && this.contactCount[j] >= 2)
-        reach = Math.max(reach, Math.hypot(vx, vy, vz) * h);
-    }
-    const range = Math.ceil((reach + this.diameter + this.smallest * 0.05) / this.diameter);
-    const plane = this.nx * this.ny;
-    for (let i = root; i !== NONE; i = this.islandNext[i]) {
-      const k = i * 3;
-      const cell = this.cells[i];
-      const cx = cell % this.nx;
-      const cy = Math.floor(cell / this.nx) % this.ny;
-      const cz = Math.floor(cell / plane);
-      for (let z = Math.max(0, cz - range); z <= Math.min(this.nx - 1, cz + range); z++)
-        for (let y = Math.max(0, cy - range); y <= Math.min(this.ny - 1, cy + range); y++)
-          for (let x = Math.max(0, cx - range); x <= Math.min(this.nx - 1, cx + range); x++)
-            for (let j = this.heads[x + this.nx * y + plane * z]; j !== NONE; j = this.next[j]) {
-              if (this.islandOf[j] === root) {
-                if (j !== i) this.stats.bulkPairSkips++;
-                continue;
-              }
-              this.stats.neighborChecks++;
-              const b = j * 3;
-              const moving = this.activeIndex[j] !== NONE;
-              const dx = p[b] - p[k], dy = p[b + 1] - p[k + 1], dz = p[b + 2] - p[k + 2];
-              const tx = ((moving ? Math.fround(Math.fround(v[b] + ax * h) * this.airDecay) : 0) - vx) * h;
-              const ty = ((moving ? Math.fround(Math.fround(v[b + 1] + ay * h) * this.airDecay) : 0) - vy) * h;
-              const tz = ((moving ? Math.fround(Math.fround(v[b + 2] + az * h) * this.airDecay) : 0) - vz) * h;
-              const travel2 = tx * tx + ty * ty + tz * tz;
-              const t = travel2 > 0 ? Math.max(0, Math.min(1, -(dx * tx + dy * ty + dz * tz) / travel2)) : 0;
-              const limit = this.radii[i] + this.radii[j] + this.smallest * 0.05;
-              if (moving && this.inDragRegion(j) && this.contactCount[j] >= 2) {
-                if (Math.hypot(dx, dy, dz) <= limit + reach) return true;
-              } else if ((dx + t * tx) ** 2 + (dy + t * ty) ** 2 + (dz + t * tz) ** 2 <= limit * limit)
-                return true;
-            }
-    }
-    return false;
-  }
-
-  private integrateIslands(ax: number, ay: number, az: number, h: number): void {
-    const p = this.positions;
-    const v = this.velocities;
-    for (let root = 0; root < this.count; root++) {
-      if (this.islandSize[root] === 0 || this.activeIndex[root] === NONE) continue;
-      const a = root * 3;
-      const vx = Math.fround(Math.fround(v[a] + ax * h) * this.airDecay);
-      const vy = Math.fround(Math.fround(v[a + 1] + ay * h) * this.airDecay);
-      const vz = Math.fround(Math.fround(v[a + 2] + az * h) * this.airDecay);
-      const travel = Math.hypot(vx, vy, vz) * h;
-      for (let i = root; i !== NONE; i = this.islandNext[i]) {
-        const k = i * 3;
-        this.support[i] = NONE;
-        this.supportAlignment[i] = 0;
-        this.contactCount[i] = 0;
-        for (let axis = 0; axis < 3; axis++) {
-          this.previous[k + axis] = p[k + axis];
-          this.correction[k + axis] = 0;
-        }
-        v[k] = this.incoming[k] = vx;
-        v[k + 1] = this.incoming[k + 1] = vy;
-        v[k + 2] = this.incoming[k + 2] = vz;
-        // Match the ordinary path's Float32 coordinate rounding, including fast sweeps.
-        const slices = Math.max(1, Math.ceil(travel / (this.radii[i] * 0.5)));
-        for (let s = 0; s < slices; s++) {
-          p[k] += vx * (h / slices);
-          p[k + 1] += vy * (h / slices);
-          p[k + 2] += vz * (h / slices);
-        }
-        for (let axis = 0; axis < 3; axis++) this.islandReference[k + axis] = p[k + axis];
-        this.updateCell(i);
-        this.stats.bulkIntegrated++;
-      }
-    }
-  }
 
   private integrate(ax: number, ay: number, az: number, dt: number): void {
     const gravity = Math.hypot(ax, ay, az);
@@ -594,7 +320,6 @@ export class Physics {
       throw new RangeError("Acceleration or dt exceeds the CPU solver safety budget; current step was not advanced");
     const h = dt / subdivisions;
     this.ambientResistance=ambientDragRate(MATERIALS[this.material].density)*this.airResistanceScale;
-    this.airDecay=1/(1+this.ambientResistance*h);
     // Preflight active velocities before changing particle state. The acceleration
     // bound also covers sleeping grains that may wake during this outer step.
     if (Math.ceil(gravity * dt * h / (this.smallest * 0.5)) > MAX_WALL_SLICES)
@@ -617,8 +342,8 @@ export class Physics {
       this.wakeAy = ay;
       this.wakeAz = az;
     }
-    // Public typed arrays can also be edited by calibration/tests. Keep the persistent
-    // grid coherent, and do not leave externally moved sleepers pinned in mid-air.
+    // Public typed arrays can also be edited by calibration/tests.
+    // Do not leave externally moved sleepers pinned in mid-air.
     for (let i = 0; i < this.count; i++) {
       const k = i * 3;
       if (this.activeIndex[i] === NONE && (
@@ -626,7 +351,6 @@ export class Physics {
         this.positions[k + 2] !== this.previous[k + 2] || this.velocities[k] !== 0 ||
         this.velocities[k + 1] !== 0 || this.velocities[k + 2] !== 0
       )) this.wake(i);
-      this.updateCell(i);
     }
     this.validateSupports();
     for (let i = 0; i < this.count; i++)
@@ -642,7 +366,6 @@ export class Physics {
         this.preForceVelocity[k+1]=v[k+1];
         this.preForceVelocity[k+2]=v[k+2];
       }
-      this.prepareIslands(ax, ay, az, h);
       // Only externally supplied initial overlap needs position-only repair.
       // Repeating frictionless repair every substep bypasses granular friction
       // and creeps a resting pile outward.
@@ -651,16 +374,12 @@ export class Physics {
         this.solvePairs(h, false);
         for(let n=0;n<this.activeCount;n++){
           const i=this.active[n];
-          if(this.islandOf[i]!==NONE)continue;
           this.solveWalls(i,h,false);
-          this.updateCell(i);
         }
         this.stabilizing = false;
       }
-      this.integrateIslands(ax, ay, az, h);
       for (let n = 0; n < this.activeCount; n++) {
         const i = this.active[n];
-        if (this.islandOf[i] !== NONE) continue;
         const k = i * 3;
         this.support[i] = NONE;
         this.supportAlignment[i] = 0;
@@ -696,32 +415,26 @@ export class Physics {
         for (let axis = 0; axis < 3; axis++) {
           this.incoming[k + axis] = v[k + axis];
         }
-        this.updateCell(i);
       }
       this.orderActive();
-      for (let iteration = 0; iteration < ITERATIONS; iteration++) {
+      for (let iteration = 0; iteration < CONTACT_ITERATIONS; iteration++) {
         this.solvePairs(h, false);
         for (let n = 0; n < this.activeCount; n++) {
           const i = this.active[n];
-          if (this.islandOf[i] !== NONE) continue;
           this.solveWalls(i, h, false);
-          this.updateCell(i);
         }
       }
       for (let n = 0; n < this.activeCount; n++) {
         const i = this.active[n];
-        if (this.islandOf[i] !== NONE) continue;
         const k = i * 3;
         for (let axis = 0; axis < 3; axis++)
           v[k + axis] = this.incoming[k + axis] + this.correction[k + axis] / h;
       }
       this.solvePairs(h, true);
-      for (let n = 0; n < this.activeCount; n++)
-        if (this.islandOf[this.active[n]] === NONE) this.wallVelocity(this.active[n]);
-      if (this.gravity >= 0.05) for (let pass = 0; pass < 2; pass++) {
+      for (let n = 0; n < this.activeCount; n++) this.wallVelocity(this.active[n]);
+      if (sub === subdivisions - 1 && this.gravity >= 0.05) for (let pass = 0; pass < 2; pass++) {
         this.solvePairs(h, true, false);
-        for (let n = 0; n < this.activeCount; n++)
-          if (this.islandOf[this.active[n]] === NONE) this.wallVelocity(this.active[n], false);
+        for (let n = 0; n < this.activeCount; n++) this.wallVelocity(this.active[n], false);
       }
       this.stats.substeps++;
     }
@@ -755,27 +468,29 @@ export class Physics {
       }
   }
 
-  private updateCell(i: number): void {
-    const k = i * 3;
-    const x = Math.max(1, Math.min(this.nx - 2, Math.floor((this.positions[k] + MAX_RADIUS) / this.diameter) + 1));
-    const y = Math.max(1, Math.min(this.ny - 2, Math.floor((this.positions[k + 1] + HALF_HEIGHT) / this.diameter) + 1));
-    const z = Math.max(1, Math.min(this.nx - 2, Math.floor((this.positions[k + 2] + MAX_RADIUS) / this.diameter) + 1));
-    const cell = x + this.nx * (y + this.ny * z);
-    const old = this.cells[i];
-    if (cell === old) return;
-    if (old !== NONE) {
-      const before = this.previousInCell[i];
-      const after = this.next[i];
-      if (before === NONE) this.heads[old] = after;
-      else this.next[before] = after;
-      if (after !== NONE) this.previousInCell[after] = before;
+  /** Count / exclusive scan / scatter keeps each cell's indices contiguous,
+   * as in grain-cuda-sand's countGrains / scatterGrains compute pipeline.
+   * No bucket capacity or neighbor cap can discard a particle.
+   */
+  private buildGrid(): void {
+    this.cellCounts.fill(0);
+    const inverseCell = 1 / this.cellSize;
+    for (let i = 0; i < this.count; i++) {
+      const k = i * 3;
+      const x = Math.max(1, Math.min(this.nx - 2, Math.floor((this.positions[k] + MAX_RADIUS) * inverseCell) + 1));
+      const y = Math.max(1, Math.min(this.ny - 2, Math.floor((this.positions[k + 1] + HALF_HEIGHT) * inverseCell) + 1));
+      const z = Math.max(1, Math.min(this.nx - 2, Math.floor((this.positions[k + 2] + MAX_RADIUS) * inverseCell) + 1));
+      const cell = x + this.nx * (y + this.ny * z);
+      this.cells[i] = cell;
+      this.cellCounts[cell]++;
     }
-    const head = this.heads[cell];
-    this.next[i] = head;
-    this.previousInCell[i] = NONE;
-    if (head !== NONE) this.previousInCell[head] = i;
-    this.heads[cell] = i;
-    this.cells[i] = cell;
+    let offset = 0;
+    for (let cell = 0; cell < this.cellCounts.length; cell++) {
+      this.cellOffsets[cell] = this.cellCursor[cell] = offset;
+      offset += this.cellCounts[cell];
+    }
+    this.cellOffsets[this.cellCounts.length] = offset;
+    for (let i = 0; i < this.count; i++) this.sorted[this.cellCursor[this.cells[i]]++] = i;
   }
 
   private recordSupport(i: number, support: number, alignment: number): void {
@@ -791,35 +506,79 @@ export class Physics {
     }
   }
 
-  private solvePairs(h: number, velocityPass: boolean, restitution = true): void {
+  /** Verlet candidates over Müller's 27-cell grid. Rebuild before the skin can
+   * close: both moving endpoints may consume half the margin.
+   * https://matthias-research.github.io/pages/tenMinutePhysics/11-hashing.pdf
+   */
+  private preparePairs(): void {
+    if (this.activeCount === 0) {
+      this.pairCount = this.pairActiveCount = 0;
+      return;
+    }
     const p = this.positions;
-    const v = this.velocities;
+    const threshold = (this.pairSkin - this.smallest * 0.04) * 0.5;
+    const threshold2 = threshold * threshold;
+    let rebuild = this.pairActiveCount !== this.activeCount;
+    for (let n = 0; !rebuild && n < this.activeCount; n++) {
+      const k = this.active[n] * 3;
+      const dx = p[k] - this.pairReference[k];
+      const dy = p[k + 1] - this.pairReference[k + 1];
+      const dz = p[k + 2] - this.pairReference[k + 2];
+      rebuild = dx * dx + dy * dy + dz * dz >= threshold2;
+    }
+    if (!rebuild) return;
+    this.buildGrid();
+    this.pairReference.set(p);
+    this.pairActiveCount = this.activeCount;
+    this.pairCount = 0;
     const plane = this.nx * this.ny;
-    const friction = MATERIALS[this.material].friction;
     for (let n = 0; n < this.activeCount; n++) {
-      const i = this.active[n];
-      if (this.islandOf[i] !== NONE) continue;
-      const a = i * 3;
-      const cell = this.cells[i];
+      const i = this.active[n], a = i * 3, cell = this.cells[i];
       for (let z = -1; z <= 1; z++) for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) {
-        for (let j = this.heads[cell + x + this.nx * y + plane * z]; j !== NONE;) {
-          // Position constraints update the grid after each pass, not while traversing a linked list.
-          const next = this.next[j];
-          if (j === i || (this.islandOf[j] === NONE &&
-            this.activeIndex[j] !== NONE && this.activeIndex[j] < n)) { j = next; continue; }
+        const neighbor = cell + x + this.nx * y + plane * z;
+        const end = this.cellOffsets[neighbor + 1];
+        for (let at = this.cellOffsets[neighbor]; at < end; at++) {
+          const j = this.sorted[at];
+          if (j === i || (this.activeIndex[j] !== NONE && this.activeIndex[j] < n)) continue;
           this.stats.neighborChecks++;
           const b = j * 3;
+          const dx = p[b] - p[a];
+          const reach = this.radii[i] + this.radii[j] + this.pairSkin;
+          if (dx > reach || dx < -reach) continue;
+          const dy = p[b + 1] - p[a + 1];
+          if (dy > reach || dy < -reach) continue;
+          const dz = p[b + 2] - p[a + 2];
+          if (dz > reach || dz < -reach) continue;
+          if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+          if (this.pairCount === this.pairA.length) {
+            const left = new Int32Array(this.pairA.length * 2);
+            const right = new Int32Array(left.length);
+            left.set(this.pairA); right.set(this.pairB);
+            this.pairA = left; this.pairB = right;
+          }
+          this.pairA[this.pairCount] = i;
+          this.pairB[this.pairCount++] = j;
+        }
+      }
+    }
+  }
+
+  private solvePairs(h: number, velocityPass: boolean, restitution = true): void {
+    this.preparePairs();
+    const p = this.positions;
+    const v = this.velocities;
+    const friction = MATERIALS[this.material].friction;
+    const tolerance = this.smallest * 0.025;
+    for (let pair = 0; pair < this.pairCount; pair++) {
+          const i = this.pairA[pair], j = this.pairB[pair];
+          const a = i * 3, b = j * 3;
+          this.stats.neighborChecks++;
           let nx = p[b] - p[a];
           let ny = p[b + 1] - p[a + 1];
           let nz = p[b + 2] - p[a + 2];
           const limit = this.radii[i] + this.radii[j];
           const d2 = nx * nx + ny * ny + nz * nz;
-          const tolerance = this.smallest * 0.025;
-          if (d2 > (limit + tolerance) ** 2) { j = next; continue; }
-          // A late contact after another PBD correction refines the whole island.
-          // Members already received this substep's acceleration; never integrate twice.
-          const island = this.islandOf[j];
-          if (island !== NONE) this.splitIsland(island, this.activeIndex[j] === NONE);
+          if (d2 > (limit + tolerance) ** 2) continue;
           if (velocityPass && restitution) {
             this.contactCount[i] = Math.min(255, this.contactCount[i] + 1);
             this.contactCount[j] = Math.min(255, this.contactCount[j] + 1);
@@ -831,18 +590,22 @@ export class Physics {
           this.recordSupport(i, j, alignment);
           if (this.activeIndex[j] !== NONE) this.recordSupport(j, i, -alignment);
           const penetration = Math.max(0, limit - distance);
-          const relativeNormal = (v[b] - v[a]) * nx + (v[b + 1] - v[a + 1]) * ny + (v[b + 2] - v[a + 2]) * nz;
-          // Quiet support loads are not impacts. Even a slow fine-sand impact
-          // must wake a sleeping surface; a fixed 0.12 m/s threshold misses it.
-          const impact=(this.preForceVelocity[b]-this.preForceVelocity[a])*nx+
-            (this.preForceVelocity[b+1]-this.preForceVelocity[a+1])*ny+
-            (this.preForceVelocity[b+2]-this.preForceVelocity[a+2])*nz;
-          if(this.activeIndex[j]===NONE&&(impact < -Math.max(.0001,Math.sqrt(this.gravity*this.smallest)*.03)||penetration>this.smallest*.08))
-            this.wake(j);
+          // Quiet support loads are not impacts. Fine-grain impacts must still
+          // wake a sleeping surface; active pairs need no wake calculation.
+          if (this.activeIndex[j] === NONE) {
+            const impact=(this.preForceVelocity[b]-this.preForceVelocity[a])*nx+
+              (this.preForceVelocity[b+1]-this.preForceVelocity[a+1])*ny+
+              (this.preForceVelocity[b+2]-this.preForceVelocity[a+2])*nz;
+            if (impact < -Math.max(.0001,Math.sqrt(this.gravity*this.smallest)*.03)||penetration>this.smallest*.08)
+              this.wake(j);
+          }
+          if (!velocityPass && penetration === 0) continue;
           const wa = this.inverseMass[i];
           const wb = this.activeIndex[j] === NONE ? 0 : this.inverseMass[j];
           const inverseWeight = 1 / (wa + wb);
           if (velocityPass) {
+            const relativeNormal = (v[b] - v[a]) * nx + (v[b + 1] - v[a + 1]) * ny + (v[b + 2] - v[a + 2]) * nz;
+            if (!restitution && relativeNormal >= 0) continue;
             const before = (this.incoming[b] - this.incoming[a]) * nx +
               (this.incoming[b + 1] - this.incoming[a + 1]) * ny +
               (this.incoming[b + 2] - this.incoming[a + 2]) * nz;
@@ -852,6 +615,7 @@ export class Physics {
             const target = !restitution ? Math.max(0, relativeNormal) :
               before < 0 ? -bounce * before : Math.max(0, Math.min(before, relativeNormal));
             const impulse = Math.max(0, target - relativeNormal) * inverseWeight;
+            if (impulse === 0) continue;
             v[a] -= nx * impulse * wa;
             v[a + 1] -= ny * impulse * wa;
             v[a + 2] -= nz * impulse * wa;
@@ -867,7 +631,7 @@ export class Physics {
               const tx=v[b]-v[a]-normal*nx;
               const ty=v[b+1]-v[a+1]-normal*ny;
               const tz=v[b+2]-v[a+2]-normal*nz;
-              const speed=Math.hypot(tx,ty,tz);
+              const speed=Math.sqrt(tx*tx+ty*ty+tz*tz);
               const desired=speed*inverseWeight;
               const tangentImpulse=desired<=friction*impulse?desired:Math.min(desired,friction*.8*impulse);
               const scale=tangentImpulse/Math.max(speed,1e-12);
@@ -882,7 +646,7 @@ export class Physics {
             dx -= normalDisplacement * nx;
             dy -= normalDisplacement * ny;
             dz -= normalDisplacement * nz;
-            const tangent = Math.hypot(dx, dy, dz);
+            const tangent = Math.sqrt(dx * dx + dy * dy + dz * dz);
             // Static friction cancels tangential displacement inside the Coulomb cone.
             // Sliding uses a smaller dynamic coefficient, never global viscous damping.
             const scale = this.stabilizing ? 0 : tangent <= friction * penetration ? 1 : Math.min(1, friction * 0.8 * penetration / Math.max(tangent, 1e-12));
@@ -905,10 +669,17 @@ export class Physics {
             }
             this.stats.contacts++;
           }
-          j = next;
-        }
-      }
     }
+  }
+
+  private cacheWall(i: number): void {
+    const y = this.positions[i * 3 + 1];
+    if (y === this.wallY[i]) return;
+    this.wallY[i] = y;
+    const slope = slopeAt(y, this.neckRadius);
+    this.wallRadius[i] = radiusAt(y, this.neckRadius);
+    this.wallSlope[i] = slope;
+    this.wallLength[i] = Math.sqrt(1 + slope * slope);
   }
 
   private solveWalls(i: number, h: number, sweep: boolean): void {
@@ -927,10 +698,11 @@ export class Physics {
     }
     // Newton projection along the analytic surface normal, not a radial velocity clamp.
     for (let pass = 0; pass < 3; pass++) {
-      const rho = Math.hypot(p[k], p[k + 2]);
-      const slope = slopeAt(p[k + 1], this.neckRadius);
-      const length = Math.sqrt(1 + slope * slope);
-      const penetration = (rho - radiusAt(p[k + 1], this.neckRadius)) / length + radius;
+      const rho = Math.sqrt(p[k] * p[k] + p[k + 2] * p[k + 2]);
+      this.cacheWall(i);
+      const slope = this.wallSlope[i];
+      const length = this.wallLength[i];
+      const penetration = (rho - this.wallRadius[i]) / length + radius;
       if (rho < 1e-12 || penetration < -tolerance) break;
       const nx = p[k] / (rho * length);
       const ny = -slope / length;
@@ -942,6 +714,23 @@ export class Physics {
     // Side projection can approach an end cap at the rim.
     if (p[k + 1] > top) this.wallConstraint(i, 0, 1, 0, p[k + 1] - top, h, sweep);
     if (p[k + 1] < -top) this.wallConstraint(i, 0, -1, 0, -top - p[k + 1], h, sweep);
+    if (Math.abs(p[k + 1]) >= top - tolerance) {
+      // At a cap/side intersection the cap projection can re-enter the side.
+      // Project their intersection radially without undoing either constraint.
+      this.cacheWall(i);
+      const rho = Math.sqrt(p[k] * p[k] + p[k + 2] * p[k + 2]);
+      const limit = this.wallRadius[i] - radius * this.wallLength[i] - 1e-9;
+      if (rho > limit && rho > 1e-12) {
+        const scale = Math.max(0, limit) / rho;
+        const dx = p[k] * (scale - 1), dz = p[k + 2] * (scale - 1);
+        p[k] += dx; p[k + 2] += dz;
+        if (!sweep) {
+          this.correction[k] += dx;
+          this.correction[k + 2] += dz;
+        }
+        this.stats.contacts++;
+      }
+    }
   }
 
   private wallConstraint(i: number, nx: number, ny: number, nz: number, penetration: number, h: number, sweep: boolean): void {
@@ -957,7 +746,7 @@ export class Physics {
     dx -= normal * nx;
     dy -= normal * ny;
     dz -= normal * nz;
-    const tangent = Math.hypot(dx, dy, dz);
+    const tangent = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const scale = this.stabilizing ? 0 : tangent <= friction * penetration ? 1 : Math.min(1, friction * 0.8 * penetration / Math.max(tangent, 1e-12));
     p[k] -= nx * penetration + dx * scale;
     p[k + 1] -= ny * penetration + dy * scale;
@@ -986,11 +775,20 @@ export class Physics {
     const tolerance = this.smallest * 0.04;
     if (p[k + 1] >= top - tolerance) this.limitWallVelocity(i, 0, 1, 0, restitution);
     if (p[k + 1] <= -top + tolerance) this.limitWallVelocity(i, 0, -1, 0, restitution);
-    const rho = Math.hypot(p[k], p[k + 2]);
-    const slope = slopeAt(p[k + 1], this.neckRadius);
-    const length = Math.sqrt(1 + slope * slope);
-    if (rho > 1e-12 && (rho - radiusAt(p[k + 1], this.neckRadius)) / length + this.radii[i] >= -tolerance)
-      this.limitWallVelocity(i, p[k] / (rho * length), -slope / length, p[k + 2] / (rho * length), restitution);
+    if (restitution) {
+      this.wallNormals[k] = this.wallNormals[k + 1] = this.wallNormals[k + 2] = 0;
+      const rho = Math.sqrt(p[k] * p[k] + p[k + 2] * p[k + 2]);
+      this.cacheWall(i);
+      const slope = this.wallSlope[i];
+      const length = this.wallLength[i];
+      if (rho > 1e-12 && (rho - this.wallRadius[i]) / length + this.radii[i] >= -tolerance) {
+        this.wallNormals[k] = p[k] / (rho * length);
+        this.wallNormals[k + 1] = -slope / length;
+        this.wallNormals[k + 2] = p[k + 2] / (rho * length);
+      }
+    }
+    if (this.wallNormals[k] !== 0 || this.wallNormals[k + 2] !== 0)
+      this.limitWallVelocity(i, this.wallNormals[k], this.wallNormals[k + 1], this.wallNormals[k + 2], restitution);
   }
 
   private limitWallVelocity(i: number, nx: number, ny: number, nz: number, restitution: boolean): void {
@@ -1008,7 +806,7 @@ export class Physics {
       const tx=v[k]-(current+change)*nx;
       const ty=v[k+1]-(current+change)*ny;
       const tz=v[k+2]-(current+change)*nz;
-      const speed=Math.hypot(tx,ty,tz);
+      const speed=Math.sqrt(tx*tx+ty*ty+tz*tz);
       const friction=nx===0&&nz===0?MATERIALS[this.material].friction:MATERIALS[this.material].wallFriction;
       const removed=speed<=friction*-change?speed:Math.min(speed,friction*.8*-change);
       const scale=removed/Math.max(speed,1e-12);
@@ -1026,17 +824,18 @@ export class Physics {
     if (parent === FLOOR) return -this.gy >= this.capSupportCos && p[k + 1] <= -HALF_HEIGHT + radius + tolerance;
     if (parent === CEILING) return this.gy >= this.capSupportCos && p[k + 1] >= HALF_HEIGHT - radius - tolerance;
     if (parent === SIDE) {
-      const rho = Math.hypot(p[k], p[k + 2]);
-      const slope = slopeAt(p[k + 1], this.neckRadius);
-      const length = Math.sqrt(1 + slope * slope);
-      return rho > 1e-12 && (rho - radiusAt(p[k + 1], this.neckRadius)) / length + radius >= -tolerance &&
+      const rho = Math.sqrt(p[k] * p[k] + p[k + 2] * p[k + 2]);
+      this.cacheWall(i);
+      const slope = this.wallSlope[i];
+      const length = this.wallLength[i];
+      return rho > 1e-12 && (rho - this.wallRadius[i]) / length + radius >= -tolerance &&
         (p[k] * this.gx / rho - slope * this.gy + p[k + 2] * this.gz / rho) / length >= this.wallSupportCos;
     }
     const b = parent * 3;
     const dx = p[b] - p[k];
     const dy = p[b + 1] - p[k + 1];
     const dz = p[b + 2] - p[k + 2];
-    const distance = Math.hypot(dx, dy, dz);
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
     return distance <= radius + this.radii[parent] + tolerance &&
       dx * this.gx + dy * this.gy + dz * this.gz > distance * 0.15;
   }
@@ -1089,6 +888,7 @@ export class Physics {
         else this.sleepTime[i] = 0;
       } else this.sleepTime[i] = 0;
       if (this.sleepTime[i] >= SLEEP_SECONDS) {
+        this.pairActiveCount = -1;
         this.activeIndex[i] = NONE;
         this.activeCount--;
         const replacement = this.active[this.activeCount];
