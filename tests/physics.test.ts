@@ -6,7 +6,6 @@ import {
   HALF_HEIGHT,
   MAX_RADIUS,
   neckRadiusFor,
-  estimatedDurationSeconds,
   radiusAt,
   slopeAt,
 } from "../src/vessel.ts";
@@ -76,7 +75,7 @@ test("true acceleration magnitude is preserved, without default gravity", () => 
 test("zero gravity preserves inertia without global damping or artificial settling", () => {
   const physics = vacuum(1);
   isolate(physics);
-  physics.positions[1] = 0.11;
+  physics.positions[1] = HALF_HEIGHT * 0.6;
   physics.velocities.set([0.03, 0.01, -0.02]);
   const velocity = physics.velocities.slice();
   for (let i = 0; i < 20; i++) physics.step([0, 0, 0]);
@@ -85,7 +84,7 @@ test("zero gravity preserves inertia without global damping or artificial settli
     Math.abs(physics.positions[0] - velocity[0] * FIXED_DT * 20) < 1e-7,
   );
   assert.ok(
-    Math.abs(physics.positions[1] - (0.11 + velocity[1] * FIXED_DT * 20)) <
+    Math.abs(physics.positions[1] - (HALF_HEIGHT * 0.6 + velocity[1] * FIXED_DT * 20)) <
       2e-7,
   );
 });
@@ -94,7 +93,7 @@ test("size-weighted collision conserves momentum and never adds kinetic energy",
   const physics = vacuum(2, 2);
   const halfDistance = (physics.radii[0] + physics.radii[1]) * 0.495;
   const massB = (physics.radii[1] / physics.radii[0]) ** 3;
-  physics.positions.set([-halfDistance, 0.12, 0, halfDistance, 0.12, 0]);
+  physics.positions.set([-halfDistance, HALF_HEIGHT * 0.6, 0, halfDistance, HALF_HEIGHT * 0.6, 0]);
   physics.velocities.set([
     0.1,
     0.02,
@@ -129,7 +128,7 @@ test("size-weighted collision conserves momentum and never adds kinetic energy",
 test("nonpenetrating contact skins apply Coulomb friction, not frictionless support",()=>{
   const pair=vacuum(2,3);
   const separation=pair.radii[0]+pair.radii[1]+Math.min(...pair.radii)*.015;
-  pair.positions.set([0,.12,0,separation,.12,0]);
+  pair.positions.set([0,HALF_HEIGHT*.6,0,separation,HALF_HEIGHT*.6,0]);
   pair.velocities.set([.001,.02,0,-.001,-.02,0]);
   pair.step([0,0,0]);
   assert.ok(Math.abs(pair.velocities[1]-pair.velocities[4])<.04-.0004,"a supported skin contact must dissipate tangential slip");
@@ -143,7 +142,7 @@ test("nonpenetrating contact skins apply Coulomb friction, not frictionless supp
 
 test("slow air-damped motion on a steep wall cannot be mistaken for static support",()=>{
   const physics=new Physics(1);
-  const y=.13,slope=slopeAt(y,physics.neckRadius);
+  const y=HALF_HEIGHT*.7,slope=slopeAt(y,physics.neckRadius);
   physics.positions.set([radiusAt(y,physics.neckRadius)-physics.radii[0]*Math.hypot(1,slope),y,0]);
   physics.velocities.fill(0);
   for(let i=0;i<60;i++)physics.step([0,-.06,0]);
@@ -203,7 +202,7 @@ test("material friction changes contact motion rather than only visual appearanc
   assert.ok(Math.abs(crystal.velocities[0]) < Math.abs(fine.velocities[0]));
 });
 
-test("more particles add real sand volume and extend the flow estimate", () => {
+test("more particles add real sand volume", () => {
   const volumes = [1000, 5000, 10000].map((count) => {
     const physics = vacuum(count);
     assert.ok(
@@ -219,18 +218,16 @@ test("more particles add real sand volume and extend the flow estimate", () => {
   });
   assert.ok(volumes[1]>volumes[0]);
   assert.ok(volumes[2]>volumes[1]);
-  assert.ok(estimatedDurationSeconds(5000)>estimatedDurationSeconds(1000));
-  assert.ok(estimatedDurationSeconds(10000)>estimatedDurationSeconds(5000));
 });
 
 test("local wall sweeps contain a high-speed grain without global CFL subdivisions", () => {
   const physics = vacuum(1);
-  physics.positions.set([0, 0.12, 0]);
+  physics.positions.set([0, HALF_HEIGHT * 0.6, 0]);
   physics.velocities.set([30, -60, 20]);
   for (let i = 0; i < 20; i++) {
     physics.step([80, -150, -40]);
     assertContained(physics);
-    assert.equal(physics.stats.substeps, 2);
+    assert.equal(physics.stats.substeps, 4);
   }
 });
 
@@ -305,7 +302,7 @@ test("only supported, quiet grains sleep after at least 0.25 seconds", () => {
   assert.equal(physics.stats.contacts, 0);
 
   const airborne = vacuum(1);
-  airborne.positions.set([0, 0.12, 0]);
+  airborne.positions.set([0, HALF_HEIGHT * 0.6, 0]);
   airborne.velocities.fill(0);
   for (let i = 0; i < 120; i++) airborne.step([0, 0, 0]);
   assert.equal(airborne.stats.sleeping, 0);
@@ -320,7 +317,7 @@ test("removing a sleeping support wakes its dependent grain without an airborne 
   for (let i = 0; i < 240; i++) physics.step([0, -9.81, 0]);
   assert.equal(physics.stats.sleeping, 2);
   const height = physics.positions[4];
-  physics.positions[0] = 0.045;
+  physics.positions[0] = MAX_RADIUS * 0.6;
   physics.step([0, -9.81, 0]);
   assert.ok(physics.stats.active >= 1);
   for (let i = 0; i < 8; i++) physics.step([0, -9.81, 0]);
@@ -331,8 +328,8 @@ test("removing a sleeping support wakes its dependent grain without an airborne 
 test("a moving grain collides with and wakes a sleeper still present in the grid", () => {
   const physics = vacuum(2);
   physics.positions.set([
-    -0.03, -HALF_HEIGHT + physics.radii[0], 0,
-    0.03, -HALF_HEIGHT + physics.radii[1], 0,
+    -MAX_RADIUS * 0.3, -HALF_HEIGHT + physics.radii[0], 0,
+    MAX_RADIUS * 0.3, -HALF_HEIGHT + physics.radii[1], 0,
   ]);
   physics.velocities.fill(0);
   for (let i = 0; i < 180; i++) physics.step([0, -9.81, 0]);
@@ -342,7 +339,7 @@ test("a moving grain collides with and wakes a sleeper still present in the grid
   for (let i = 0; i < 10; i++) {
     physics.step([0, -9.81, 0]);
     if (physics.velocities[3] > 0.01) wokeOnImpact = true;
-    assert.equal(physics.stats.substeps, 2);
+    assert.equal(physics.stats.substeps, 4);
     assertContained(physics);
   }
   assert.ok(wokeOnImpact);
@@ -350,7 +347,7 @@ test("a moving grain collides with and wakes a sleeper still present in the grid
 
 test("a gentle fine-sand impact wakes its sleeping support instead of freezing the bed",()=>{
   const physics=vacuum(2);
-  physics.positions.set([-.03,-HALF_HEIGHT+physics.radii[0],0,.03,-HALF_HEIGHT+physics.radii[1],0]);
+  physics.positions.set([-MAX_RADIUS*.3,-HALF_HEIGHT+physics.radii[0],0,MAX_RADIUS*.3,-HALF_HEIGHT+physics.radii[1],0]);
   physics.velocities.fill(0);
   for(let i=0;i<180;i++)physics.step([0,-9.81,0]);
   assert.equal(physics.stats.sleeping,2);
@@ -402,12 +399,12 @@ test("a localized fine-sand pour forms a resting cone and resists a small tilt",
   const spacing=Math.max(...physics.radii)*2.01;
   const row=spacing*Math.sqrt(3)/2;
   let grain=0, layer=0;
-  for(let y=-.158;grain<physics.count;y+=spacing*Math.sqrt(2/3),layer++){
+  for(let y=-HALF_HEIGHT+Math.max(...physics.radii)*5;grain<physics.count;y+=spacing*Math.sqrt(2/3),layer++){
     for(let iz=-3;iz<=3&&grain<physics.count;iz++)
       for(let ix=-3;ix<=3&&grain<physics.count;ix++){
         const x=(ix+(iz&1)*.5+(layer&1)*.5)*spacing;
         const z=iz*row+(layer&1)*row/3;
-        if(x*x+z*z>.01**2)continue;
+        if(x*x+z*z>(MAX_RADIUS*.24)**2)continue;
         physics.positions.set([x,y,z],grain*3);
         grain++;
       }
@@ -424,14 +421,21 @@ test("a localized fine-sand pour forms a resting cone and resists a small tilt",
     }
     assert.ok(lowerCount>=physics.count*.9,"the deposition fixture must remain in the lower chamber");
     centerX/=lowerCount;centerZ/=lowerCount;
-    // Fit the actual flank, not a single coarse grain at a flat-topped pour's
-    // rim. An off-axis tallest grain is not the symmetry axis of the whole heap.
+    // The pour leaves a central plateau. Measure the outer half of the actual
+    // footprint, not fixed vessel radii that can land entirely on that plateau.
+    let footprint=0;
+    for(let i=0;i<physics.count;i++){
+      if(physics.positions[i*3+1]>=0)continue;
+      footprint=Math.max(footprint,Math.hypot(physics.positions[i*3]-centerX,physics.positions[i*3+2]-centerZ));
+    }
     const heights=new Float64Array(6).fill(-Infinity);
     const populations=new Uint32Array(6);
+    const binWidth=footprint/(heights.length*2);
     for(let i=0;i<physics.count;i++){
       const k=i*3;
+      if(physics.positions[k+1]>=0)continue;
       const radius=Math.hypot(physics.positions[k]-centerX,physics.positions[k+2]-centerZ);
-      const bin=Math.floor((radius-.012)/.004);
+      const bin=Math.min(heights.length-1,Math.floor((radius-footprint*.5)/binWidth));
       if(bin<0||bin>=heights.length)continue;
       populations[bin]++;
       heights[bin]=Math.max(heights[bin],physics.positions[k+1]+physics.radii[i]);
@@ -440,7 +444,7 @@ test("a localized fine-sand pour forms a resting cone and resists a small tilt",
     const mean=heights.reduce((sum,h)=>sum+h,0)/heights.length;
     let cross=0,xx=0,yy=0;
     for(let bin=0;bin<heights.length;bin++){
-      const x=(bin-(heights.length-1)/2)*.004,y=heights[bin]-mean;
+      const x=(bin-(heights.length-1)/2)*binWidth,y=heights[bin]-mean;
       cross+=x*y;xx+=x*x;yy+=y*y;
     }
     const angle=Math.atan(-cross/xx)*180/Math.PI;
@@ -481,7 +485,7 @@ test("local porous-bed resistance slows contacting samples but preserves acceler
   const isolated=new Physics(1);
   const outside=new Physics(1);
   isolate(isolated);isolate(outside);
-  outside.positions[1]=.12;
+  outside.positions[1]=HALF_HEIGHT*.6;
   isolated.velocities.set([.02,0,0]);outside.velocities.set([.02,0,0]);
   for(let i=0;i<20;i++){isolated.step([0,0,0]);outside.step([0,0,0]);}
   assert.deepEqual(isolated.velocities,outside.velocities,"an isolated neck sample has ambient drag, not porous-bed drag");

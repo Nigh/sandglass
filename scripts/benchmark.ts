@@ -19,9 +19,13 @@ const outputPath =
   outputArgument?.slice("--output=".length) || "benchmark-results.json";
 if (!Number.isFinite(seconds) || seconds <= 0)
   throw new RangeError("--seconds must be positive and finite");
+const countsArgument = process.argv.find((argument) => argument.startsWith("--counts="));
+const counts = countsArgument ? countsArgument.slice("--counts=".length).split(",").map(Number) : [1000, 5000, 10000];
+if (counts.some((count) => !Number.isSafeInteger(count) || count < 1 || count > 100_000))
+  throw new RangeError("--counts requires comma-separated integers from 1 to 100000");
 
 const results = [];
-for (const count of [1000, 5000, 10000]) {
+for (const count of counts) {
   const physics = new Physics(count);
   const durations: number[] = [];
   const sceneNames = [
@@ -51,9 +55,6 @@ for (const count of [1000, 5000, 10000]) {
   let activeTotal = 0;
   let sleepingTotal = 0;
   let supportedActiveTotal = 0;
-  let bulkIntegrated=0;
-  let bulkPairSkips=0;
-  let islandSplits=0;
   let statsSamples = 0;
   let lower = 0;
   let minimumUpper = count;
@@ -95,9 +96,6 @@ for (const count of [1000, 5000, 10000]) {
     activeTotal += physics.stats.active;
     sleepingTotal += physics.stats.sleeping;
     supportedActiveTotal += physics.stats.supportedActive;
-    bulkIntegrated+=physics.stats.bulkIntegrated;
-    bulkPairSkips+=physics.stats.bulkPairSkips;
-    islandSplits+=physics.stats.islandSplits;
     statsSamples++;
     // Full state scans are separately included in total wall time, not in reported solver-step times.
     if (physics.stats.steps % 12 === 0) {
@@ -153,6 +151,10 @@ for (const count of [1000, 5000, 10000]) {
       p99: durations[Math.floor((durations.length - 1) * 0.99)],
       max: durations[durations.length - 1],
     },
+    physicsBudgetAt60FpsMs: {
+      mean: cpuMs / durations.length / FIXED_DT / 60,
+      p95: durations[Math.floor((durations.length - 1) * 0.95)] / FIXED_DT / 60,
+    },
     scenes,
     activity: {
       active: physics.stats.active,
@@ -164,11 +166,6 @@ for (const count of [1000, 5000, 10000]) {
       sleepingFraction: physics.stats.sleeping / count,
       neighborChecks,
       meanNeighborChecksPerStep: neighborChecks / statsSamples,
-      islands:physics.stats.islands,
-      clustered:physics.stats.clustered,
-      bulkIntegrated,
-      bulkPairSkips,
-      islandSplits,
     },
     stability: {
       sampledStates,
@@ -190,10 +187,10 @@ for (const count of [1000, 5000, 10000]) {
 }
 const report = {
   generatedAt: new Date().toISOString(),
-  backend: "CPU particle solver used by the browser Web Worker",
+  backend: "CPU particle fallback solver used by the browser Web Worker",
   benchmarkExecution:
     "Node main thread; worker transport and rendering are not measured",
-  gpuBackend: "not implemented",
+  gpuBackend: "not measured by this CPU-only benchmark",
   renderAndGpuMetrics: null,
   clock: "performance.now, milliseconds",
   fixedDtSeconds: FIXED_DT,

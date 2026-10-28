@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { cpus } from "node:os";
 import { Physics } from "../src/physics.ts";
-import { FIXED_DT, HALF_HEIGHT, MAX_RADIUS, MICRO_GRAIN_DIAMETER, ambientDragRate, bedDragRate, estimatedDurationSeconds, grainBaseRadius, neckRadiusFor, radiusAt } from "../src/vessel.ts";
+import { FIXED_DT, HALF_HEIGHT, MAX_RADIUS, MICRO_GRAIN_DIAMETER, ambientDragRate, bedDragRate, grainBaseRadius, neckRadiusFor, radiusAt } from "../src/vessel.ts";
 
 // npx tsx scripts/flow-benchmark.ts --counts=1000,5000,10000 --seconds=300 --neck-scale=1 --output=flow-results.json
 // --seconds is simulated time, not a wall-clock budget. No particles are injected or recycled.
@@ -92,7 +92,6 @@ for (const neckScale of neckScales) for (const count of counts) {
   let minimumWallClearance = Infinity;
   let contacts = 0;
   let neighborChecks = 0;
-  let bulkIntegrated=0,bulkPairSkips=0,islandSplits=0;
   let solverMs = 0;
   let maxStepMs = 0;
   let initialUpperCount = 0;
@@ -173,9 +172,6 @@ for (const neckScale of neckScales) for (const count of counts) {
     maxStepMs = Math.max(maxStepMs, physics.stats.ms);
     contacts += physics.stats.contacts;
     neighborChecks += physics.stats.neighborChecks;
-    bulkIntegrated+=physics.stats.bulkIntegrated;
-    bulkPairSkips+=physics.stats.bulkPairSkips;
-    islandSplits+=physics.stats.islandSplits;
     if (step % sampleSteps === 0 || step === requestedSteps) sample(step * FIXED_DT);
   }
   const pile = pileAngle(physics);
@@ -192,7 +188,6 @@ for (const neckScale of neckScales) for (const count of counts) {
     durationTargetPassed,
     longestFlowGapSeconds,
     microGrainDiameterMetres:MICRO_GRAIN_DIAMETER,
-    roughDurationEstimateSeconds:estimatedDurationSeconds(count),
     neckDragRatePerSecond:bedDragRate(1700),
     ambientDragRatePerSecond:ambientDragRate(1700),
     statusReason: status === "drained" ? "Every grain is below y=0 at the final sample" : status === "stalled" ? `Grains remain above y=0 with no newly observed crossing for at least ${stalledWindowSeconds} simulated seconds` : "Requested simulated time ended before all grains reached the lower chamber",
@@ -230,8 +225,6 @@ for (const neckScale of neckScales) for (const count of counts) {
       meanSampledSleepingFraction: samples.reduce((sum, entry) => sum + entry.sleepingFraction, 0) / samples.length,
       meanSampledSupportedActive: samples.reduce((sum, entry) => sum + entry.supportedActive, 0) / samples.length,
       neighborChecks, contacts,
-      islands:physics.stats.islands,clustered:physics.stats.clustered,
-      bulkIntegrated,bulkPairSkips,islandSplits,
     },
     pile,
     solverMs: { total: solverMs, mean: solverMs / requestedSteps, max: maxStepMs },
@@ -250,7 +243,7 @@ for (const neckScale of neckScales) for (const count of counts) {
 const report = {
   generatedAt: new Date().toISOString(),
   backend: "CPU particle solver, standard sand under fixed 1 g; no rendering or worker transport",
-  model:"coarse fine-sand volume samples + PBD Coulomb friction + adaptive translation/sleep islands + ambient Stokes and local Darcy-inspired resistance; no gas pressure/velocity solver",
+  model:"coarse fine-sand volume samples + PBD Coulomb friction + support-chain sleeping + ambient Stokes and local Darcy-inspired resistance; no gas pressure/velocity solver",
   fixedDtSeconds: FIXED_DT,
   sampling: {
     intervalSimulatedSeconds: sampleSteps * FIXED_DT,

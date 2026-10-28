@@ -1,7 +1,26 @@
 import * as THREE from "three";
+import {
+  MeshStandardNodeMaterial,
+  PMREMGenerator as GpuPMREMGenerator,
+  StorageBufferAttribute,
+  WebGPURenderer,
+} from "three/webgpu";
+import {
+  float, instanceIndex, normalGeometry, positionGeometry, rotate, storage,
+  transformNormalToView, uniform, vec3,
+} from "three/tsl";
+
+// Three r180 exposes these backend methods at runtime, but omits them from its types.
+type StorageBackend = WebGPURenderer["backend"] & {
+  readonly isWebGPUBackend: boolean;
+  readonly device: GPUDevice;
+  createStorageAttribute(attribute: StorageBufferAttribute): void;
+  destroyAttribute(attribute: StorageBufferAttribute): void;
+  get(attribute: StorageBufferAttribute): { buffer: GPUBuffer };
+};
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { HALF_HEIGHT, neckRadiusFor, radiusAt } from "./vessel";
+import { HALF_HEIGHT, MAX_RADIUS, neckRadiusFor, radiusAt } from "./vessel";
 
 export const palettes = [
   "自然金色",
@@ -20,7 +39,10 @@ const colors = [
   ["#dd795f", "#dbbd68", "#73ae96", "#739dc4", "#b18cae"],
 ];
 export class SandScene {
-  renderer: THREE.WebGLRenderer;
+  readonly renderer: THREE.WebGLRenderer | WebGPURenderer;
+  readonly backend: "webgpu" | "cpu";
+  readonly gpuDevice?: GPUDevice;
+  private storageAttribute?: StorageBufferAttribute;
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10);
   controls: OrbitControls;
@@ -32,10 +54,8 @@ export class SandScene {
     new THREE.OctahedronGeometry(1, 0),
     new THREE.IcosahedronGeometry(1, 0),
   ];
-  material = new THREE.MeshStandardMaterial({
-    roughness: 0.55,
-    metalness: 0.12,
-  });
+  material: THREE.MeshStandardMaterial | MeshStandardNodeMaterial;
+  private readonly gpuShapeScale = uniform(new THREE.Vector3(1, 0.9, 0.85));
   dummy = new THREE.Object3D();
   color = new THREE.Color();
   radii: Float32Array = new Float32Array();
@@ -43,19 +63,57 @@ export class SandScene {
   palette = 0;
   count = 0;
   observer: ResizeObserver;
-  environment: THREE.WebGLRenderTarget;
-  constructor(public container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({
+  environment: THREE.RenderTarget;
+
+  static async create(container: HTMLElement): Promise<SandScene> {
+    const adapter = navigator.gpu
+      ? await navigator.gpu.requestAdapter({ powerPreference: "high-performance" })
+      : null;
+    if (adapter) {
+      const device = await adapter.requestDevice({
+        requiredFeatures: adapter.features.has("timestamp-query") ? ["timestamp-query"] : [],
+      });
+      const renderer = new WebGPURenderer({ device, antialias: true, alpha: true });
+      // An acquired GPU that fails initialization is an error, not CPU physics.
+      renderer._getFallback = null;
+      try {
+        await renderer.init();
+        return new SandScene(container, renderer);
+      } catch (error) {
+        renderer.dispose();
+        device.destroy();
+        throw error;
+      }
+    }
+    return new SandScene(container, new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
       powerPreference: "high-performance",
-    });
+    }));
+  }
+
+  private constructor(
+    public container: HTMLElement,
+    renderer: THREE.WebGLRenderer | WebGPURenderer,
+  ) {
+    this.renderer = renderer;
+    this.backend = renderer instanceof WebGPURenderer ? "webgpu" : "cpu";
+    if (renderer instanceof WebGPURenderer) {
+      const backend = renderer.backend as StorageBackend;
+      if (!backend.isWebGPUBackend) throw new Error("WebGPU renderer did not acquire a WebGPU backend");
+      this.gpuDevice = backend.device;
+    }
+    this.material = this.backend === "webgpu"
+      ? new MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0.12 })
+      : new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.12 });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
     this.renderer.setClearColor(0x101719, 0);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.4;
     container.append(this.renderer.domElement);
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const pmrem = renderer instanceof WebGPURenderer
+      ? new GpuPMREMGenerator(renderer)
+      : new THREE.PMREMGenerator(renderer);
     const room = new RoomEnvironment();
     this.environment = pmrem.fromScene(room, 0.04);
     room.dispose();
@@ -63,12 +121,12 @@ export class SandScene {
     this.scene.environment = this.environment.texture;
     this.camera.position
       .set(0.43, 0.19, 0.73)
-      .multiplyScalar(container.clientWidth < 650 ? 1.25 : 1);
+      .multiplyScalar((HALF_HEIGHT / 0.18) * (container.clientWidth < 650 ? 1.25 : 1));
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.enablePan = false;
-    this.controls.minDistance = 0.48;
-    this.controls.maxDistance = 1.6;
+    this.controls.minDistance = HALF_HEIGHT * (0.48 / 0.18);
+    this.controls.maxDistance = HALF_HEIGHT * (1.6 / 0.18);
     this.controls.minPolarAngle = 0.2;
     this.controls.maxPolarAngle = Math.PI - 0.2;
     this.scene.add(new THREE.HemisphereLight(0xc5e7e8, 0x29302c, 2));
@@ -84,7 +142,8 @@ export class SandScene {
       roughness: 0.12,
       metalness: 0,
       transparent: true,
-      opacity: 0.16,
+      // WebGPU blends into HDR before tone mapping; avoid a milky, opaque shell.
+      opacity: this.backend === "webgpu" ? 0.025 : 0.16,
       side: THREE.DoubleSide,
       depthWrite: false,
       clearcoat: 1,
@@ -104,33 +163,33 @@ export class SandScene {
     });
     for (const sign of [-1, 1]) {
       const cap = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.108, 0.108, 0.013, 64),
+        new THREE.CylinderGeometry(MAX_RADIUS * 1.2, MAX_RADIUS * 1.2, HALF_HEIGHT * 0.072, 64),
         dark,
       );
-      cap.position.y = sign * 0.193;
+      cap.position.y = sign * HALF_HEIGHT * 1.072;
       this.scene.add(cap);
       const lip = new THREE.Mesh(
-        new THREE.TorusGeometry(0.101, 0.002, 8, 64),
+        new THREE.TorusGeometry(MAX_RADIUS * 1.122, MAX_RADIUS * 0.022, 8, 64),
         metal,
       );
       lip.rotation.x = Math.PI / 2;
-      lip.position.y = sign * 0.184;
+      lip.position.y = sign * HALF_HEIGHT * 1.022;
       this.scene.add(lip);
       const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.108, 0.0018, 8, 64),
+        new THREE.TorusGeometry(MAX_RADIUS * 1.2, MAX_RADIUS * 0.02, 8, 64),
         metal,
       );
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = sign * 0.195;
+      ring.position.y = sign * HALF_HEIGHT * 1.083;
       this.scene.add(ring);
     }
     for (let i = 0; i < 3; i++) {
       const a = (i * Math.PI * 2) / 3 + 0.4;
       const post = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.0028, 0.0028, 0.373, 12),
+        new THREE.CylinderGeometry(MAX_RADIUS * 0.031, MAX_RADIUS * 0.031, HALF_HEIGHT * 2.072, 12),
         metal,
       );
-      post.position.set(Math.sin(a) * 0.101, 0, Math.cos(a) * 0.101);
+      post.position.set(Math.sin(a) * MAX_RADIUS * 1.122, 0, Math.cos(a) * MAX_RADIUS * 1.122);
       this.scene.add(post);
     }
     this.observer = new ResizeObserver(() => this.resize());
@@ -157,10 +216,39 @@ export class SandScene {
   resetView() {
     this.camera.position
       .set(0.43, 0.19, 0.73)
-      .multiplyScalar(this.container.clientWidth < 650 ? 1.25 : 1);
+      .multiplyScalar((HALF_HEIGHT / 0.18) * (this.container.clientWidth < 650 ? 1.25 : 1));
     this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
+  createGpuStorage(): GPUBuffer {
+    if (!(this.renderer instanceof WebGPURenderer) || !this.count) {
+      throw new Error("Configure a WebGPU scene before creating particle storage");
+    }
+    this.releaseGpuStorage();
+    const attribute = new StorageBufferAttribute(this.count, 4);
+    attribute.name = "GPU particle positions and radii";
+    const backend = this.renderer.backend as StorageBackend;
+    backend.createStorageAttribute(attribute);
+    this.storageAttribute = attribute;
+    const particle = storage(attribute, "vec4", this.count).toReadOnly().element(instanceIndex);
+    const material = this.material as MeshStandardNodeMaterial;
+    const rotation = float(instanceIndex).mul(vec3(0.7, 1.2, 0.31));
+    // Only the grain geometry rotates/stretches. Its GPU center is added last.
+    material.positionNode = rotate(positionGeometry.mul(this.gpuShapeScale), rotation)
+      .mul(particle.w).add(particle.xyz);
+    material.normalNode = transformNormalToView(
+      rotate(normalGeometry.div(this.gpuShapeScale), rotation),
+    ).toVarying().normalize();
+    material.needsUpdate = true;
+    return backend.get(attribute).buffer;
+  }
+
+  private releaseGpuStorage() {
+    if (!this.storageAttribute || !(this.renderer instanceof WebGPURenderer)) return;
+    (this.renderer.backend as StorageBackend).destroyAttribute(this.storageAttribute);
+    this.storageAttribute = undefined;
+  }
+
   configure(count: number, radii: Float32Array, neckRadius: number) {
     const oldGeometry = this.shell.geometry;
     this.shell.geometry = this.glassGeometry(neckRadius);
@@ -176,7 +264,7 @@ export class SandScene {
       this.material,
       count,
     );
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (this.backend === "cpu") this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.frustumCulled = false;
     this.prepareInstances();
     this.scene.add(this.mesh);
@@ -184,6 +272,7 @@ export class SandScene {
   }
   setShape(shape: number) {
     this.shape = shape;
+    this.gpuShapeScale.value.set(shape === 1 ? 0.85 : 1, shape === 2 ? 1 : 0.9, 0.85);
     if (this.mesh) {
       this.mesh.geometry = this.geometries[shape];
       this.prepareInstances();
@@ -203,6 +292,16 @@ export class SandScene {
   }
   private prepareInstances() {
     const matrices = this.mesh.instanceMatrix.array;
+    if (this.backend === "webgpu") {
+      // Never let an instance transform rotate/scale the GPU world-space center.
+      matrices.fill(0);
+      for (let i = 0; i < this.count; i++) {
+        const offset = i * 16;
+        matrices[offset] = matrices[offset + 5] = matrices[offset + 10] = matrices[offset + 15] = 1;
+      }
+      this.mesh.instanceMatrix.needsUpdate = true;
+      return;
+    }
     for (let i = 0; i < this.count; i++) {
       const offset = i * 16;
       const r = this.radii[i];
@@ -218,12 +317,12 @@ export class SandScene {
         r * 0.85,
       );
       this.dummy.updateMatrix();
-      this.mesh.setMatrixAt(i, this.dummy.matrix);
+      this.dummy.matrix.toArray(matrices, offset);
     }
     this.mesh.instanceMatrix.needsUpdate = true;
   }
   update(positions: Float32Array) {
-    if (!this.mesh) return;
+    if (!this.mesh || this.backend === "webgpu") return;
     const matrices = this.mesh.instanceMatrix.array;
     let changed = false;
     for (let i = 0; i < this.count; i++) {
@@ -246,6 +345,7 @@ export class SandScene {
     this.renderer.render(this.scene, this.camera);
   }
   dispose() {
+    this.releaseGpuStorage();
     this.observer.disconnect();
     this.controls.dispose();
     this.scene.traverse((o) => {

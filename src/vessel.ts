@@ -1,5 +1,5 @@
-export const HALF_HEIGHT = 0.18;
-export const MAX_RADIUS = 0.09;
+export const HALF_HEIGHT = 0.043;
+export const MAX_RADIUS = 0.025;
 export const FIXED_DT = 1 / 120;
 
 /** Fine-sand permeability, separate from the coarse collision sampling radius. */
@@ -25,32 +25,23 @@ export function grainBaseRadius(count: number): number {
     throw new RangeError("count must be an integer from 1 to 100000");
   // ponytail: one control increases volume while refining grains; split quantity
   // from resolution only if independent controls become necessary.
-  return Math.min(0.0073, 0.0016 * (1000 / count) ** 0.25);
+  return Math.min(MAX_RADIUS / 9, 0.00042 * (5000 / count) ** 0.25);
 }
 
-/** Geometric clearance plus a fixed fine-sand hydraulic opening; no target timer. */
+/** Narrow physical aperture; material-dependent arching remains part of the contact dynamics. */
 export function neckRadiusFor(count: number): number {
-  return Math.min(MAX_RADIUS * 0.95, Math.max(6.5 * grainBaseRadius(count), 0.0069));
+  return 3.75 * grainBaseRadius(count);
 }
 
-const REFERENCE_VOLUME=1000*grainBaseRadius(1000)**3;
-const REFERENCE_NECK=neckRadiusFor(1000);
-/** Rough 1g/standard/air estimate from measured 1000-grain mean flux (97 s).
- * More volume and a smaller opening extend the estimate; never drives physics.
- */
-export function estimatedDurationSeconds(count:number):number{
-  return 97*(count*grainBaseRadius(count)**3/REFERENCE_VOLUME)*(REFERENCE_NECK/neckRadiusFor(count))**2;
-}
-
-/** Analytic surface of revolution; end caps lie at ±HALF_HEIGHT. */
+/** Rounded double cone with a short throat; planar end caps lie at ±HALF_HEIGHT. */
 export function radiusAt(y: number, neckRadius: number): number {
-  const clamped = Math.max(-HALF_HEIGHT, Math.min(HALF_HEIGHT, y));
-  const sine = Math.sin((Math.PI * clamped) / (2 * HALF_HEIGHT));
-  return neckRadius + (MAX_RADIUS - neckRadius) * sine * sine;
+  const height = Math.min(1, Math.abs(y) / HALF_HEIGHT);
+  return Math.sqrt(neckRadius * neckRadius + (MAX_RADIUS * MAX_RADIUS - neckRadius * neckRadius) * height * height);
 }
 
-/** Exact derivative of radiusAt, including its clamped extension. */
+/** Exact derivative inside the vessel; the clamped extension is flat beyond the end caps. */
 export function slopeAt(y: number, neckRadius: number): number {
   if (Math.abs(y) >= HALF_HEIGHT) return 0;
-  return ((MAX_RADIUS - neckRadius) * Math.PI * Math.sin((Math.PI * y) / HALF_HEIGHT)) / (2 * HALF_HEIGHT);
+  return (MAX_RADIUS * MAX_RADIUS - neckRadius * neckRadius) * y /
+    (HALF_HEIGHT * HALF_HEIGHT * radiusAt(y, neckRadius));
 }
