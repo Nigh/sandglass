@@ -23,6 +23,14 @@ npm run preview
 
 `dist/` 可部署到任何静态 HTTPS 托管服务。`public/_headers` 适用于支持此格式的平台；其他服务器应设置 `Permissions-Policy: accelerometer=(self), gyroscope=(self), magnetometer=(self)`。嵌入 iframe 还需要父页面的 Permissions Policy 和 `allow="accelerometer; gyroscope; magnetometer"`。应用不依赖 SharedArrayBuffer，无需 COOP/COEP。
 
+### GitHub Pages
+
+站点地址：[nigh.github.io/sandglass](https://nigh.github.io/sandglass/)。
+
+`.github/workflows/deploy-pages.yml` 在推送到 `main` 时自动运行，也支持 Actions 页面手动执行 `workflow_dispatch`。工作流使用 Node.js 24，依次运行 `npm ci`、单元测试和 TypeScript/Vite 构建，再通过官方 Pages artifact 部署；构建路径取自 Pages 配置，支持仓库子路径。构建仅有读取权限，部署单独授予 `pages: write` 和 `id-token: write`。
+
+仓库的 Settings → Pages → Source 需选择 **GitHub Actions**。Pages 不处理 `public/_headers`；传感器仍需用户授权，嵌入其他网站时需由嵌入方设置 Permissions Policy。
+
 ## 使用
 
 - 首次加载尝试权限申请。iOS 可能要求点击“启用手机传感器”；两个权限 API 在同一用户手势调用栈内执行。
