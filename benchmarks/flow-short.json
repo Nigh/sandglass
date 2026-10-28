@@ -1,0 +1,339 @@
+{
+  "generatedAt": "2026-10-28T08:51:15.813Z",
+  "backend": "CPU particle solver, standard sand under fixed 1 g; no rendering or worker transport",
+  "model": "coarse fine-sand volume samples + PBD Coulomb friction + adaptive translation/sleep islands + ambient Stokes and local Darcy-inspired resistance; no gas pressure/velocity solver",
+  "fixedDtSeconds": 0.008333333333333333,
+  "sampling": {
+    "intervalSimulatedSeconds": 1,
+    "crossings": "Each grain counts once when first observed below y=0; times are upper sample bounds, quantized to at most one simulated second. Crossings that return above y=0 between samples are not observed.",
+    "stability": "Full particle scans at t=0, each simulated second, and the final step; not every step",
+    "stalledWindowSeconds": 30,
+    "pile": "Linear fit of radial top-surface bins for lower grains moving at <=0.03 m/s; excludes floor-touching grains, central bin, outer bin and bins with <3 grains. Positive angle means height decreases outward; null means insufficient data. This measurement alone does not establish a stable cone."
+  },
+  "environment": {
+    "node": "v24.9.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra 7 265K"
+  },
+  "results": [
+    {
+      "count": 1000,
+      "status": "incomplete",
+      "durationTargetPassed": false,
+      "longestFlowGapSeconds": 0.05,
+      "microGrainDiameterMetres": 0.000026,
+      "roughDurationEstimateSeconds": 97,
+      "neckDragRatePerSecond": 37535.75937570153,
+      "ambientDragRatePerSecond": 281.93525931082496,
+      "statusReason": "Requested simulated time ended before all grains reached the lower chamber",
+      "material": "standard sand",
+      "accelerationMetresPerSecondSquared": [
+        0,
+        -9.81,
+        0
+      ],
+      "requestedSimulatedSeconds": 0.05,
+      "simulatedSeconds": 0.05,
+      "wallSeconds": 0.05075900699999998,
+      "realCpuSeconds": 0.123102,
+      "cpuUserSeconds": 0.118072,
+      "cpuSystemSeconds": 0.00503,
+      "simulatedToWallRatio": 0.9850468508968274,
+      "steps": 6,
+      "neckScale": 1,
+      "neckRadiusMetres": 0.010400000000000001,
+      "neckDiameterMetres": 0.020800000000000003,
+      "neckDiameterToMeanGrainDiameter": 6.500000000000001,
+      "smallestGrainRadiusMetres": 0.0012633828446269035,
+      "largestGrainRadiusMetres": 0.001894787885248661,
+      "grainsTooWideForNeck": 0,
+      "openingWarning": "Geometric clearance does not rule out frictional arching",
+      "flow": {
+        "initialUpperCount": 1000,
+        "initialLowerCount": 0,
+        "upperCount": 1000,
+        "lowerCount": 0,
+        "firstObservedBelowCount": 0,
+        "t10Seconds": null,
+        "t50Seconds": null,
+        "t90Seconds": null,
+        "t95Seconds": null,
+        "lastObservedOutflowSeconds": null,
+        "firstAllBelowSeconds": null,
+        "noObservedOutflowSeconds": 0.05
+      },
+      "activity": {
+        "active": 1000,
+        "sleeping": 0,
+        "sleepingFraction": 0,
+        "supportedActive": 0,
+        "meanSampledSleepingFraction": 0,
+        "meanSampledSupportedActive": 0,
+        "neighborChecks": 778752,
+        "contacts": 182,
+        "islands": 13,
+        "clustered": 855,
+        "bulkIntegrated": 10647,
+        "bulkPairSkips": 190690,
+        "islandSplits": 32
+      },
+      "pile": {
+        "angleDegrees": null,
+        "rSquared": null,
+        "surface": []
+      },
+      "solverMs": {
+        "total": 49.76537399999998,
+        "mean": 8.294228999999996,
+        "max": 14.144425999999996
+      },
+      "stability": {
+        "passed": true,
+        "sampledStates": 2,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "countViolations": 0,
+        "initialGrainVolumeCubicMetres": 0.00001715728467065049,
+        "conservedParticleCountAndRadii": true,
+        "minimumWallClearanceMetres": 0.00012313256896903657,
+        "droppedSeconds": 0
+      },
+      "samples": [
+        {
+          "simulatedSeconds": 0,
+          "upper": 1000,
+          "lower": 0,
+          "firstObservedBelow": 0,
+          "active": 1000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        },
+        {
+          "simulatedSeconds": 0.05,
+          "upper": 1000,
+          "lower": 0,
+          "firstObservedBelow": 0,
+          "active": 1000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        }
+      ]
+    },
+    {
+      "count": 5000,
+      "status": "incomplete",
+      "durationTargetPassed": false,
+      "longestFlowGapSeconds": 0,
+      "microGrainDiameterMetres": 0.000026,
+      "roughDurationEstimateSeconds": 324.3390479135646,
+      "neckDragRatePerSecond": 37535.75937570153,
+      "ambientDragRatePerSecond": 281.93525931082496,
+      "statusReason": "Requested simulated time ended before all grains reached the lower chamber",
+      "material": "standard sand",
+      "accelerationMetresPerSecondSquared": [
+        0,
+        -9.81,
+        0
+      ],
+      "requestedSimulatedSeconds": 0.05,
+      "simulatedSeconds": 0.05,
+      "wallSeconds": 0.14529263799999997,
+      "realCpuSeconds": 0.273761,
+      "cpuUserSeconds": 0.267434,
+      "cpuSystemSeconds": 0.006327,
+      "simulatedToWallRatio": 0.34413305924006976,
+      "steps": 6,
+      "neckScale": 1,
+      "neckRadiusMetres": 0.00695489917175479,
+      "neckDiameterMetres": 0.01390979834350958,
+      "neckDiameterToMeanGrainDiameter": 6.5,
+      "smallestGrainRadiusMetres": 0.0008448830340057611,
+      "largestGrainRadiusMetres": 0.0012672514421865344,
+      "grainsTooWideForNeck": 0,
+      "openingWarning": "Geometric clearance does not rule out frictional arching",
+      "flow": {
+        "initialUpperCount": 5000,
+        "initialLowerCount": 0,
+        "upperCount": 4987,
+        "lowerCount": 13,
+        "firstObservedBelowCount": 13,
+        "t10Seconds": null,
+        "t50Seconds": null,
+        "t90Seconds": null,
+        "t95Seconds": null,
+        "lastObservedOutflowSeconds": 0.05,
+        "firstAllBelowSeconds": null,
+        "noObservedOutflowSeconds": 0
+      },
+      "activity": {
+        "active": 5000,
+        "sleeping": 0,
+        "sleepingFraction": 0,
+        "supportedActive": 0,
+        "meanSampledSleepingFraction": 0,
+        "meanSampledSupportedActive": 0,
+        "neighborChecks": 4722195,
+        "contacts": 3979,
+        "islands": 58,
+        "clustered": 3827,
+        "bulkIntegrated": 53407,
+        "bulkPairSkips": 1025334,
+        "islandSplits": 213
+      },
+      "pile": {
+        "angleDegrees": null,
+        "rSquared": null,
+        "surface": []
+      },
+      "solverMs": {
+        "total": 142.87835599999997,
+        "mean": 23.813059333333328,
+        "max": 30.380734999999987
+      },
+      "stability": {
+        "passed": true,
+        "sampledStates": 2,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "countViolations": 0,
+        "initialGrainVolumeCubicMetres": 0.0000256561247222118,
+        "conservedParticleCountAndRadii": true,
+        "minimumWallClearanceMetres": 0.000002415324573084958,
+        "droppedSeconds": 0
+      },
+      "samples": [
+        {
+          "simulatedSeconds": 0,
+          "upper": 5000,
+          "lower": 0,
+          "firstObservedBelow": 0,
+          "active": 5000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        },
+        {
+          "simulatedSeconds": 0.05,
+          "upper": 4987,
+          "lower": 13,
+          "firstObservedBelow": 13,
+          "active": 5000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        }
+      ]
+    },
+    {
+      "count": 10000,
+      "status": "incomplete",
+      "durationTargetPassed": false,
+      "longestFlowGapSeconds": 0,
+      "microGrainDiameterMetres": 0.000026,
+      "roughDurationEstimateSeconds": 391.8683889101357,
+      "neckDragRatePerSecond": 37535.75937570153,
+      "ambientDragRatePerSecond": 281.93525931082496,
+      "statusReason": "Requested simulated time ended before all grains reached the lower chamber",
+      "material": "standard sand",
+      "accelerationMetresPerSecondSquared": [
+        0,
+        -9.81,
+        0
+      ],
+      "requestedSimulatedSeconds": 0.05,
+      "simulatedSeconds": 0.05,
+      "wallSeconds": 0.266379679,
+      "realCpuSeconds": 0.301704,
+      "cpuUserSeconds": 0.298886,
+      "cpuSystemSeconds": 0.002818,
+      "simulatedToWallRatio": 0.18770200560231176,
+      "steps": 6,
+      "neckScale": 1,
+      "neckRadiusMetres": 0.0069,
+      "neckDiameterMetres": 0.0138,
+      "neckDiameterToMeanGrainDiameter": 7.668829955792854,
+      "smallestGrainRadiusMetres": 0.0007104672840796411,
+      "largestGrainRadiusMetres": 0.0010656773811206222,
+      "grainsTooWideForNeck": 0,
+      "openingWarning": "Geometric clearance does not rule out frictional arching",
+      "flow": {
+        "initialUpperCount": 10000,
+        "initialLowerCount": 0,
+        "upperCount": 9979,
+        "lowerCount": 21,
+        "firstObservedBelowCount": 21,
+        "t10Seconds": null,
+        "t50Seconds": null,
+        "t90Seconds": null,
+        "t95Seconds": null,
+        "lastObservedOutflowSeconds": 0.05,
+        "firstAllBelowSeconds": null,
+        "noObservedOutflowSeconds": 0
+      },
+      "activity": {
+        "active": 10000,
+        "sleeping": 0,
+        "sleepingFraction": 0,
+        "supportedActive": 0,
+        "meanSampledSleepingFraction": 0,
+        "meanSampledSupportedActive": 0,
+        "neighborChecks": 10643576,
+        "contacts": 10756,
+        "islands": 59,
+        "clustered": 6101,
+        "bulkIntegrated": 102328,
+        "bulkPairSkips": 2063715,
+        "islandSplits": 446
+      },
+      "pile": {
+        "angleDegrees": null,
+        "rSquared": null,
+        "surface": []
+      },
+      "solverMs": {
+        "total": 265.50544500000007,
+        "mean": 44.25090750000001,
+        "max": 51.25525200000004
+      },
+      "stability": {
+        "passed": true,
+        "sampledStates": 2,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "countViolations": 0,
+        "initialGrainVolumeCubicMetres": 0.000030510446048363173,
+        "conservedParticleCountAndRadii": true,
+        "minimumWallClearanceMetres": 0.000012712970413478533,
+        "droppedSeconds": 0
+      },
+      "samples": [
+        {
+          "simulatedSeconds": 0,
+          "upper": 10000,
+          "lower": 0,
+          "firstObservedBelow": 0,
+          "active": 10000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        },
+        {
+          "simulatedSeconds": 0.05,
+          "upper": 9979,
+          "lower": 21,
+          "firstObservedBelow": 21,
+          "active": 10000,
+          "sleeping": 0,
+          "sleepingFraction": 0,
+          "supportedActive": 0
+        }
+      ]
+    }
+  ]
+}

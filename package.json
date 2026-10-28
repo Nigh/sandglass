@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "benchmark": "tsx scripts/benchmark.ts",
+    "benchmark:flow": "tsx scripts/flow-benchmark.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

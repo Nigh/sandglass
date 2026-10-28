@@ -2,7 +2,7 @@ import { Physics } from "./physics";
 
 export type PhysicsRequest =
   | { type: "calibrate" }
-  | { type: "init"; count: number; material?: number }
+  | { type: "init"; count: number; material?: number; air?:boolean }
   | {
       type: "advance";
       elapsed: number;
@@ -11,6 +11,7 @@ export type PhysicsRequest =
       buffer?: ArrayBuffer;
     }
   | { type: "reset" }
+  | { type: "air"; enabled:boolean }
   | { type: "material"; material: number };
 
 // CPU worker backend. No timer and no autonomous simulation: one request produces one frame.
@@ -35,6 +36,7 @@ function sendState(buffer?: ArrayBuffer, includeRadii = false): void {
       radii,
       stats: physics.stats,
       count: physics.count,
+      neckRadius: physics.neckRadius,
     },
     radii ? [positions, radii] : [positions],
   );
@@ -59,7 +61,7 @@ scope.onmessage = (event) => {
         break;
       }
       case "init":
-        physics = new Physics(request.count, request.material ?? 1);
+        physics = new Physics(request.count, request.material ?? 1,undefined,request.air===false?0:1);
         sendState(undefined, true);
         break;
       case "advance":
@@ -75,6 +77,10 @@ scope.onmessage = (event) => {
         if (!physics)
           throw new Error("Initialize physics before changing material");
         physics.setMaterial(request.material);
+        break;
+      case "air":
+        if(!physics)throw new Error("Initialize physics before changing air resistance");
+        physics.setAirResistance(request.enabled);
         break;
       default:
         throw new Error("Unknown physics request");

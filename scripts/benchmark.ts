@@ -1,12 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { cpus } from "node:os";
-import {
-  FIXED_DT,
-  HALF_HEIGHT,
-  MATERIALS,
-  Physics,
-  radiusAt,
-} from "../src/physics.ts";
+import { MATERIALS, Physics } from "../src/physics.ts";
+import { FIXED_DT, HALF_HEIGHT, radiusAt } from "../src/vessel.ts";
 
 // Run with: npm run benchmark -- --output=benchmark-results.json
 // Default is 60 actual wall-clock seconds PER count, not a fabricated 60-second simulation.
@@ -52,6 +47,14 @@ for (const count of [1000, 5000, 10000]) {
   let maximumSpeed = 0;
   let contacts = 0;
   let upper = 0;
+  let neighborChecks = 0;
+  let activeTotal = 0;
+  let sleepingTotal = 0;
+  let supportedActiveTotal = 0;
+  let bulkIntegrated=0;
+  let bulkPairSkips=0;
+  let islandSplits=0;
+  let statsSamples = 0;
   let lower = 0;
   let minimumUpper = count;
   let maximumUpper = 0;
@@ -88,6 +91,14 @@ for (const count of [1000, 5000, 10000]) {
       physics.stats.ms,
     );
     contacts += physics.stats.contacts;
+    neighborChecks += physics.stats.neighborChecks;
+    activeTotal += physics.stats.active;
+    sleepingTotal += physics.stats.sleeping;
+    supportedActiveTotal += physics.stats.supportedActive;
+    bulkIntegrated+=physics.stats.bulkIntegrated;
+    bulkPairSkips+=physics.stats.bulkPairSkips;
+    islandSplits+=physics.stats.islandSplits;
+    statsSamples++;
     // Full state scans are separately included in total wall time, not in reported solver-step times.
     if (physics.stats.steps % 12 === 0) {
       sampledStates++;
@@ -111,7 +122,7 @@ for (const count of [1000, 5000, 10000]) {
         if (r !== initialRadii[i]) radiusChanges++;
         const clearance = Math.min(
           HALF_HEIGHT - Math.abs(y) - r,
-          radiusAt(y) - Math.hypot(x, z) - r,
+          radiusAt(y, physics.neckRadius) - Math.hypot(x, z) - r,
         );
         minimumWallClearance = Math.min(minimumWallClearance, clearance);
         if (clearance < -2e-7) boundaryViolations++;
@@ -128,6 +139,7 @@ for (const count of [1000, 5000, 10000]) {
   const cpuMs = scenes.reduce((sum, scene) => sum + scene.cpuMs, 0);
   results.push({
     count,
+    neckRadiusMetres: physics.neckRadius,
     requestedWallSeconds: seconds,
     actualWallSeconds: elapsed / 1000,
     simulatedSeconds: physics.stats.steps * FIXED_DT,
@@ -142,6 +154,22 @@ for (const count of [1000, 5000, 10000]) {
       max: durations[durations.length - 1],
     },
     scenes,
+    activity: {
+      active: physics.stats.active,
+      sleeping: physics.stats.sleeping,
+      supportedActive: physics.stats.supportedActive,
+      meanActive: activeTotal / statsSamples,
+      meanSleeping: sleepingTotal / statsSamples,
+      meanSupportedActive: supportedActiveTotal / statsSamples,
+      sleepingFraction: physics.stats.sleeping / count,
+      neighborChecks,
+      meanNeighborChecksPerStep: neighborChecks / statsSamples,
+      islands:physics.stats.islands,
+      clustered:physics.stats.clustered,
+      bulkIntegrated,
+      bulkPairSkips,
+      islandSplits,
+    },
     stability: {
       sampledStates,
       nonFiniteComponents,

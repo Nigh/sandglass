@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { radiusAt } from "./physics";
+import { HALF_HEIGHT, neckRadiusFor, radiusAt } from "./vessel";
 
 export const palettes = [
   "自然金色",
@@ -25,6 +25,7 @@ export class SandScene {
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10);
   controls: OrbitControls;
   mesh!: THREE.InstancedMesh;
+  private shell: THREE.Mesh<THREE.LatheGeometry, THREE.MeshPhysicalMaterial>;
   geometries = [
     new THREE.IcosahedronGeometry(1, 0),
     new THREE.SphereGeometry(1, 7, 5),
@@ -77,11 +78,7 @@ export class SandScene {
     const rim = new THREE.DirectionalLight(0x87cad6, 2);
     rim.position.set(0.5, 0, -0.4);
     this.scene.add(rim);
-    const profile: THREE.Vector2[] = [];
-    for (let i = 0; i <= 160; i++) {
-      const y = -0.18 + (i * 0.36) / 160;
-      profile.push(new THREE.Vector2(radiusAt(y) + 0.0015, y));
-    }
+    const geometry = this.glassGeometry(neckRadiusFor(1000));
     const glass = new THREE.MeshPhysicalMaterial({
       color: 0xd3e8df,
       roughness: 0.12,
@@ -92,9 +89,9 @@ export class SandScene {
       depthWrite: false,
       clearcoat: 1,
     });
-    const shell = new THREE.Mesh(new THREE.LatheGeometry(profile, 72), glass);
-    shell.renderOrder = 2;
-    this.scene.add(shell);
+    this.shell = new THREE.Mesh(geometry, glass);
+    this.shell.renderOrder = 2;
+    this.scene.add(this.shell);
     const metal = new THREE.MeshStandardMaterial({
       color: 0x796a50,
       metalness: 0.8,
@@ -143,6 +140,14 @@ export class SandScene {
       this.resetView(),
     );
   }
+  private glassGeometry(neckRadius: number): THREE.LatheGeometry {
+    const profile: THREE.Vector2[] = [];
+    for (let i = 0; i <= 160; i++) {
+      const y = -HALF_HEIGHT + (i * 2 * HALF_HEIGHT) / 160;
+      profile.push(new THREE.Vector2(radiusAt(y, neckRadius), y));
+    }
+    return new THREE.LatheGeometry(profile, 72);
+  }
   resize() {
     const { width, height } = this.container.getBoundingClientRect();
     this.renderer.setSize(width, height);
@@ -156,7 +161,10 @@ export class SandScene {
     this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
-  configure(count: number, radii: Float32Array) {
+  configure(count: number, radii: Float32Array, neckRadius: number) {
+    const oldGeometry = this.shell.geometry;
+    this.shell.geometry = this.glassGeometry(neckRadius);
+    oldGeometry.dispose();
     this.radii = radii;
     this.count = count;
     if (this.mesh) {
@@ -170,12 +178,16 @@ export class SandScene {
     );
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.frustumCulled = false;
+    this.prepareInstances();
     this.scene.add(this.mesh);
     this.setPalette(this.palette);
   }
   setShape(shape: number) {
     this.shape = shape;
-    if (this.mesh) this.mesh.geometry = this.geometries[shape];
+    if (this.mesh) {
+      this.mesh.geometry = this.geometries[shape];
+      this.prepareInstances();
+    }
     this.material.roughness = shape === 2 ? 0.22 : 0.55;
   }
   setPalette(palette: number) {
@@ -189,11 +201,16 @@ export class SandScene {
     }
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
-  update(positions: Float32Array) {
-    if (!this.mesh) return;
+  private prepareInstances() {
+    const matrices = this.mesh.instanceMatrix.array;
     for (let i = 0; i < this.count; i++) {
+      const offset = i * 16;
       const r = this.radii[i];
-      this.dummy.position.fromArray(positions, i * 3);
+      this.dummy.position.set(
+        matrices[offset + 12],
+        matrices[offset + 13],
+        matrices[offset + 14],
+      );
       this.dummy.rotation.set(i * 0.7, i * 1.2, i * 0.31);
       this.dummy.scale.set(
         r * (this.shape === 1 ? 0.85 : 1),
@@ -204,6 +221,25 @@ export class SandScene {
       this.mesh.setMatrixAt(i, this.dummy.matrix);
     }
     this.mesh.instanceMatrix.needsUpdate = true;
+  }
+  update(positions: Float32Array) {
+    if (!this.mesh) return;
+    const matrices = this.mesh.instanceMatrix.array;
+    let changed = false;
+    for (let i = 0; i < this.count; i++) {
+      const p = i * 3;
+      const offset = i * 16 + 12;
+      if (
+        matrices[offset] === positions[p] &&
+        matrices[offset + 1] === positions[p + 1] &&
+        matrices[offset + 2] === positions[p + 2]
+      ) continue;
+      matrices[offset] = positions[p];
+      matrices[offset + 1] = positions[p + 1];
+      matrices[offset + 2] = positions[p + 2];
+      changed = true;
+    }
+    if (changed) this.mesh.instanceMatrix.needsUpdate = true;
   }
   render() {
     this.controls.update();
