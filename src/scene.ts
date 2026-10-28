@@ -46,6 +46,7 @@ export class SandScene {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10);
   controls: OrbitControls;
+  private readonly mobile = matchMedia("(pointer: coarse)").matches;
   mesh!: THREE.InstancedMesh;
   private shell: THREE.Mesh<THREE.LatheGeometry, THREE.MeshPhysicalMaterial>;
   geometries = [
@@ -106,7 +107,7 @@ export class SandScene {
     this.material = this.backend === "webgpu"
       ? new MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0.12 })
       : new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.12 });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.mobile ? 1 : 1.6));
     this.renderer.setClearColor(0x101719, 0);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.4;
@@ -120,9 +121,10 @@ export class SandScene {
     pmrem.dispose();
     this.scene.environment = this.environment.texture;
     this.camera.position
-      .set(0.43, 0.19, 0.73)
+      .set(this.mobile ? 0 : 0.43, this.mobile ? 0 : 0.19, this.mobile ? 0.85 : 0.73)
       .multiplyScalar((HALF_HEIGHT / 0.18) * (container.clientWidth < 650 ? 1.25 : 1));
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enabled = !this.mobile;
     this.controls.enableDamping = true;
     this.controls.enablePan = false;
     this.controls.minDistance = HALF_HEIGHT * (0.48 / 0.18);
@@ -215,7 +217,7 @@ export class SandScene {
   }
   resetView() {
     this.camera.position
-      .set(0.43, 0.19, 0.73)
+      .set(this.mobile ? 0 : 0.43, this.mobile ? 0 : 0.19, this.mobile ? 0.85 : 0.73)
       .multiplyScalar((HALF_HEIGHT / 0.18) * (this.container.clientWidth < 650 ? 1.25 : 1));
     this.controls.target.set(0, 0, 0);
     this.controls.update();

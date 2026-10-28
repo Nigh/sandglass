@@ -23,7 +23,14 @@ $("material").closest("label")!.after(airLabel);
 const airEnabled=()=>($("air") as HTMLInputElement).checked;
 ($("count") as HTMLInputElement).min="1000";
 $("quality").parentElement!.firstChild!.textContent="砂量与性能档位";
+const mobile = matchMedia("(pointer: coarse)").matches;
 const sensor = new SensorInput();
+if (mobile) {
+  sensor.polarity = -1;
+  ($("polarity") as HTMLSelectElement).value = "-1";
+  $("help").textContent = "固定正面视角 · 转动手机改变沙流方向";
+  $("view").hidden = true;
+}
 const stage = $("viewport");
 let scene: SandScene;
 let worker: Worker | undefined;
@@ -63,10 +70,10 @@ let startup = true,
   fastWindows = 0,
   windowStart = performance.now(),
   windowFrames: number[] = [],
-  pixelRatio = Math.min(devicePixelRatio, 1.6);
+  pixelRatio = Math.min(devicePixelRatio, mobile ? 1 : 1.6);
 const hardware = navigator as Navigator & { deviceMemory?: number };
 const initialCount =
-  hardware.hardwareConcurrency >= 8 && (hardware.deviceMemory ?? 4) >= 8
+  !mobile && hardware.hardwareConcurrency >= 8 && (hardware.deviceMemory ?? 4) >= 8
     ? 5000
     : 1000;
 count = initialCount;
@@ -397,7 +404,7 @@ function updateUi(now: number) {
 累计物理步数 ${steps}
 模拟时间     ${(steps*FIXED_DT).toFixed(1)} s
 粒子数量     ${count}
-活跃 / 休眠  ${gpuPhysics ? "GPU 常驻 / 未回读" : `${active} / ${sleeping}`}
+活跃 / 休眠  ${gpuPhysics ? `${count} / 0（GPU 未实现休眠）` : `${active} / ${sleeping}`}
 瓶颈内径     ${(neckRadius*2000).toFixed(2)} mm
 有效细砂直径 ${(MICRO_GRAIN_DIAMETER*1e6).toFixed(0)} µm（粗采样，非逐微粒DEM）
 空气模型     ${airEnabled()?"Stokes + 颈部 Darcy 有效闭合（非完整气体求解）":"真空 · 无空气阻力"}
@@ -552,8 +559,8 @@ function frame() {
         `持续低帧率：像素比 ${pixelRatio.toFixed(2)}，外观已切换为低面数细砂。保留 ${count} 粒；可主动选择较低档位重新分布。`;
       slowWindows = 0;
     }
-    if (fastWindows >= 6 && pixelRatio < 1.6) {
-      pixelRatio = Math.min(1.6, pixelRatio + 0.1);
+    if (fastWindows >= 6 && pixelRatio < (mobile ? 1 : 1.6)) {
+      pixelRatio = Math.min(mobile ? 1 : 1.6, pixelRatio + 0.1);
       scene.renderer.setPixelRatio(pixelRatio);
       scene.resize();
       fastWindows = 0;
@@ -592,8 +599,8 @@ async function initialize() {
       scene.gpuDevice.addEventListener("uncapturederror", (event) => {
         if (!disposed) fail(new Error(`WebGPU：${event.error.message}`));
       });
-      count = 5000;
-      ($("quality") as HTMLSelectElement).value = "1";
+      count = mobile ? 1000 : 5000;
+      ($("quality") as HTMLSelectElement).value = mobile ? "0" : "1";
       ($("count") as HTMLInputElement).value = String(count);
       await configureGpu(count);
     } else {
