@@ -21,27 +21,27 @@
       "lower": 119,
       "nonFinite": 0,
       "boundaryViolations": 0,
-      "maxOverlapFraction": 0.26453352655263224,
-      "gpuBatchMs": 6.711648
+      "maxOverlapFraction": 0.2487212418729702,
+      "gpuBatchMs": 3.709984
     },
     {
       "time": 2,
-      "lower": 210,
+      "lower": 209,
       "nonFinite": 0,
       "boundaryViolations": 0,
-      "maxOverlapFraction": 0.248185346196904,
-      "gpuBatchMs": 4.14544
+      "maxOverlapFraction": 0.3197640171897286,
+      "gpuBatchMs": 3.76528
     },
     {
       "time": 3,
-      "lower": 305,
+      "lower": 301,
       "nonFinite": 0,
       "boundaryViolations": 0,
-      "maxOverlapFraction": 0.21087639827520077,
-      "gpuBatchMs": 5.121984
+      "maxOverlapFraction": 0.23977032925467992,
+      "gpuBatchMs": 3.781344
     }
   ],
-  "upwardMean": 0.04222245647832751,
+  "upwardMean": 0.04222422437146308,
   "initialMean": 0.01673057129950033,
   "errors": []
 }

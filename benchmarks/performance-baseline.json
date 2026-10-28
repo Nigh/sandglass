@@ -1,0 +1,26 @@
+{
+  "adapter": {
+    "vendor": "nvidia",
+    "architecture": "blackwell",
+    "fallback": false
+  },
+  "cases": [
+    {
+      "steps": 720,
+      "material": 1,
+      "scenario": "1000 grains initialized in lower chamber",
+      "count": 1000,
+      "seconds": 6,
+      "rmsSpeedMmPerSecond": 0.03745417799052881,
+      "earlyGpuStepMedianMs": 0.952096,
+      "wallMs": 2419.199999988079,
+      "gpuStepMedianMs": 0.961088,
+      "initialPeakMm": 42.953935912344605,
+      "nonFinite": 0,
+      "boundaryViolations": 0,
+      "finalPeakMm": 2.8265706445090437,
+      "radialRmsMm": 12.806353302756879
+    }
+  ],
+  "errors": []
+}

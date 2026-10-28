@@ -20,6 +20,7 @@ struct Auxiliary {
 @group(0) @binding(5) var<storage, read_write> auxiliary: array<Auxiliary>;
 @group(0) @binding(6) var<storage, read_write> heads: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> links: array<u32>;
+@group(0) @binding(8) var<storage, read_write> occupiedCells: array<u32>;
 const NONE: u32 = 0xffffffffu;
 
 fn radial(y: f32) -> f32 {
@@ -171,18 +172,23 @@ fn predict(@builtin(global_invocation_id) id: vec3u) {
   predicted[i] = vec4f(p, old.w);
   auxiliary[i].incoming = vec4f(v, 0.0);
   auxiliary[i].correction = vec4f(0.0);
+  let cell = cellIndex(cellCoordinates(p));
+  occupiedCells[i] = cell;
+  links[i] = atomicExchange(&heads[cell], i + 1u) - 1u;
 }
 
 @compute @workgroup_size(128)
 fn clearBins(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x < params.dimensions.w) { atomicStore(&heads[id.x], NONE); }
+  // Duplicate clears are atomic; every nonempty cell has at least one owner.
+  if (id.x < params.dimensions.x) { atomicStore(&heads[occupiedCells[id.x]], 0u); }
 }
 @compute @workgroup_size(128)
 fn buildBins(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= params.dimensions.x) { return; }
   let cell = cellIndex(cellCoordinates(predicted[i].xyz));
-  links[i] = atomicExchange(&heads[cell], i);
+  occupiedCells[i] = cell;
+  links[i] = atomicExchange(&heads[cell], i + 1u) - 1u;
 }
 
 
@@ -198,7 +204,7 @@ fn solvePositions(@builtin(global_invocation_id) id: vec3u) {
   for (var z = -1; z <= 1; z++) { for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) {
     let cell = center + vec3i(x, y, z);
     if (!validCell(cell)) { continue; }
-    var j = atomicLoad(&heads[cellIndex(cell)]);
+    var j = atomicLoad(&heads[cellIndex(cell)]) - 1u;
     loop {
       if (j == NONE) { break; }
       if (j != i) {
@@ -224,24 +230,22 @@ fn solvePositions(@builtin(global_invocation_id) id: vec3u) {
   corrected[i] = vec4f(next, p.w);
 }
 
-@compute @workgroup_size(128)
-fn reconstructVelocity(@builtin(global_invocation_id) id: vec3u) {
-  let i = id.x;
-  if (i >= params.dimensions.x) { return; }
-  velocities[i] = vec4f(auxiliary[i].incoming.xyz + auxiliary[i].correction.xyz / params.geometry.y, 0.0);
+// Position corrections are complete before this pass; reconstruct on demand.
+fn reconstructedVelocity(i: u32) -> vec3f {
+  return auxiliary[i].incoming.xyz + auxiliary[i].correction.xyz / params.geometry.y;
 }
 
 fn velocityContact(i: u32) -> vec4f {
   let p = predicted[i];
   let center = cellCoordinates(p.xyz);
-  let velocity = velocities[i].xyz;
+  let velocity = reconstructedVelocity(i);
   let wi = inverseMass(p.w);
   var correction = vec3f(0.0);
   var contacts = 0.0;
   for (var z = -1; z <= 1; z++) { for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) {
     let cell = center + vec3i(x, y, z);
     if (!validCell(cell)) { continue; }
-    var j = atomicLoad(&heads[cellIndex(cell)]);
+    var j = atomicLoad(&heads[cellIndex(cell)]) - 1u;
     loop {
       if (j == NONE) { break; }
       if (j != i) {
@@ -251,7 +255,7 @@ fn velocityContact(i: u32) -> vec4f {
         if (distance <= p.w + q.w + params.drag.w) {
           contacts += 1.0;
           let n = contactNormal(i, j, delta, distance);
-          let neighbor = velocities[j].xyz;
+          let neighbor = reconstructedVelocity(j);
           let relative = velocity - neighbor;
           let normal = dot(relative, n);
           let before = dot(auxiliary[i].incoming.xyz - auxiliary[j].incoming.xyz, n);

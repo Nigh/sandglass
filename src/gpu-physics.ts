@@ -31,6 +31,7 @@ export class GpuPhysics {
   private readonly auxiliary: GPUBuffer;
   private readonly heads: GPUBuffer;
   private readonly links: GPUBuffer;
+  private readonly occupiedCells: GPUBuffer;
   private timestampQueries: GPUQuerySet | null = null;
   private timestampResolve: GPUBuffer | null = null;
   private timestampRead: GPUBuffer | null = null;
@@ -115,10 +116,10 @@ export class GpuPhysics {
     this.predictions = [make(this.count * 16, "GPU Jacobi A"), make(this.count * 16, "GPU Jacobi B")];
     this.auxiliary = make(this.count * 48, "GPU sand contact workspace");
     // One link per grain, not per cell: no bucket capacity, overflow, scan, or dropped grain.
-    // At 5000 grains occupancy is small; atomicExchange + 27-cell traversal costs less
-    // than scanning ~200000 mostly empty cells. Rebuild before every correction.
+    // Track each grain's previous cell so rebuilding clears occupied cells only.
     this.heads = make(this.cells * 4, "GPU spatial bin heads");
     this.links = make(this.count * 4, "GPU spatial bin links");
+    this.occupiedCells = make(this.count * 4, "GPU occupied cells");
     if (device.features.has("timestamp-query")) {
       this.timestampQueries = device.createQuerySet({ type: "timestamp", count: 2 });
       this.timestampResolve = make(16, "GPU compute timestamp resolve", GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC);
@@ -132,19 +133,19 @@ export class GpuPhysics {
     const info = await module.getCompilationInfo();
     const errors = info.messages.filter(message => message.type === "error");
     if (errors.length) throw new Error(errors.map(message => `WGSL ${message.lineNum}:${message.linePos} ${message.message}`).join("\n"));
-    const layout = this.device.createBindGroupLayout({ entries: Array.from({ length: 8 }, (_, binding) => ({
+    const layout = this.device.createBindGroupLayout({ entries: Array.from({ length: 9 }, (_, binding) => ({
       binding, visibility: GPUShaderStage.COMPUTE,
       buffer: { type: binding === 0 ? "uniform" as const : "storage" as const },
     })) });
     const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [layout] });
-    const names = ["predict", "clearBins", "buildBins", "solvePositions", "reconstructVelocity", "solveVelocity", "commit"];
+    const names = ["predict", "clearBins", "buildBins", "solvePositions", "solveVelocity", "commit"];
     const pipelines = await Promise.all(names.map(entryPoint => this.device.createComputePipelineAsync({
       label: `GPU sand ${entryPoint}`, layout: pipelineLayout, compute: { module, entryPoint },
     })));
     names.forEach((name, index) => this.pipelines.set(name, pipelines[index]));
     for (let side = 0; side < 2; side++) {
       const buffers = [this.uniform, this.positions, this.velocities, this.predictions[side],
-        this.predictions[1 - side], this.auxiliary, this.heads, this.links];
+        this.predictions[1 - side], this.auxiliary, this.heads, this.links, this.occupiedCells];
       this.bindings.push(this.device.createBindGroup({ layout, entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })) }));
     }
   }
@@ -176,20 +177,20 @@ export class GpuPhysics {
       pass.dispatchWorkgroups(groups);
     };
     const grid = (side: number) => {
-      dispatch("clearBins", side, Math.ceil(this.cells / WORKGROUP));
+      dispatch("clearBins", side);
       dispatch("buildBins", side);
     };
     for (let step = 0; step < steps; step++) for (let substep = 0; substep < SUBSTEPS; substep++) {
+      dispatch("clearBins");
       dispatch("predict");
       let side = 0;
       for (let iteration = 0; iteration < ITERATIONS; iteration++) {
-        grid(side);
+        if (iteration > 0) grid(side);
         dispatch("solvePositions", side);
         side = 1 - side;
       }
       // Final projection changes neighbors too. Never reuse an earlier grid.
       grid(side);
-      dispatch("reconstructVelocity", side);
       dispatch("solveVelocity", side);
       dispatch("commit", side);
     }
@@ -222,6 +223,7 @@ export class GpuPhysics {
     const encoder = this.device.createCommandEncoder({ label: "Reset GPU sand" });
     encoder.clearBuffer(this.velocities);
     encoder.clearBuffer(this.auxiliary);
+    encoder.clearBuffer(this.heads);
     this.device.queue.submit([encoder.finish()]);
     this.accumulator = 0;
     this.stats.ms = this.stats.steps = this.stats.substeps = this.stats.dropped = 0;
