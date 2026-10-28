@@ -1,0 +1,206 @@
+{
+  "generatedAt": "2026-10-28T04:40:54.951Z",
+  "backend": "CPU particle solver used by the browser Web Worker",
+  "benchmarkExecution": "Node main thread; worker transport and rendering are not measured",
+  "gpuBackend": "not implemented",
+  "renderAndGpuMetrics": null,
+  "clock": "performance.now, milliseconds",
+  "fixedDtSeconds": 0.008333333333333333,
+  "environment": {
+    "node": "v24.9.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra 7 265K"
+  },
+  "results": [
+    {
+      "count": 1000,
+      "requestedWallSeconds": 60,
+      "actualWallSeconds": 60.001316565,
+      "simulatedSeconds": 231.79166666666666,
+      "steps": 27815,
+      "simulatedToWallRatio": 3.8631096771945748,
+      "solverMs": {
+        "total": 59869.864967999834,
+        "mean": 2.1524308814668287,
+        "p50": 0.7535719999941648,
+        "p95": 8.745967999999266,
+        "p99": 18.07469900000433,
+        "max": 31.938170999997965
+      },
+      "scenes": [
+        {
+          "name": "downward-pile",
+          "steps": 3786,
+          "cpuMs": 11971.522296000076,
+          "maxStepMs": 23.435060000000135
+        },
+        {
+          "name": "zero-g",
+          "steps": 16364,
+          "cpuMs": 11933.26397099982,
+          "maxStepMs": 25.39920800000027
+        },
+        {
+          "name": "continuous-flip",
+          "steps": 4709,
+          "cpuMs": 11993.225537000062,
+          "maxStepMs": 19.44761799999833
+        },
+        {
+          "name": "high-magnitude",
+          "steps": 784,
+          "cpuMs": 12004.136885999998,
+          "maxStepMs": 31.938170999997965
+        },
+        {
+          "name": "upward-pile",
+          "steps": 2172,
+          "cpuMs": 11967.716277999876,
+          "maxStepMs": 24.620106999998825
+        }
+      ],
+      "stability": {
+        "sampledStates": 2317,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "conservedParticleCount": true,
+        "minimumWallClearanceMetres": -7.385388023362083e-9,
+        "maximumSpeedMetresPerSecond": 5.1927787550134346,
+        "lastSampleUpperCount": 1000,
+        "lastSampleLowerCount": 0,
+        "minimumUpperCount": 0,
+        "maximumUpperCount": 1000,
+        "contacts": 349471887,
+        "droppedSeconds": 0
+      }
+    },
+    {
+      "count": 5000,
+      "requestedWallSeconds": 60,
+      "actualWallSeconds": 60.080402305,
+      "simulatedSeconds": 15.924999999999999,
+      "steps": 1911,
+      "simulatedToWallRatio": 0.26506147410858283,
+      "solverMs": {
+        "total": 60046.389816000396,
+        "mean": 31.421449406593613,
+        "p50": 13.540129000000888,
+        "p95": 120.39082499999495,
+        "p99": 188.66767999999865,
+        "max": 240.15342699999746
+      },
+      "scenes": [
+        {
+          "name": "downward-pile",
+          "steps": 224,
+          "cpuMs": 11970.975750999889,
+          "maxStepMs": 144.8997490000038
+        },
+        {
+          "name": "zero-g",
+          "steps": 1178,
+          "cpuMs": 11805.082028000448,
+          "maxStepMs": 57.12634299999627
+        },
+        {
+          "name": "continuous-flip",
+          "steps": 307,
+          "cpuMs": 12179.005483000015,
+          "maxStepMs": 59.173651999997674
+        },
+        {
+          "name": "high-magnitude",
+          "steps": 89,
+          "cpuMs": 12546.061233000015,
+          "maxStepMs": 240.15342699999746
+        },
+        {
+          "name": "upward-pile",
+          "steps": 113,
+          "cpuMs": 11545.265321000028,
+          "maxStepMs": 192.66371100000106
+        }
+      ],
+      "stability": {
+        "sampledStates": 159,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "conservedParticleCount": true,
+        "minimumWallClearanceMetres": -7.385388023362083e-9,
+        "maximumSpeedMetresPerSecond": 4.779452557172559,
+        "lastSampleUpperCount": 710,
+        "lastSampleLowerCount": 4290,
+        "minimumUpperCount": 0,
+        "maximumUpperCount": 5000,
+        "contacts": 323258665,
+        "droppedSeconds": 0
+      }
+    },
+    {
+      "count": 10000,
+      "requestedWallSeconds": 60,
+      "actualWallSeconds": 60.24681378400001,
+      "simulatedSeconds": 3.7083333333333335,
+      "steps": 445,
+      "simulatedToWallRatio": 0.0615523560570131,
+      "solverMs": {
+        "total": 60225.62098299996,
+        "mean": 135.33847411910102,
+        "p50": 105.86712499998976,
+        "p95": 367.1215150000062,
+        "p99": 474.95220900001004,
+        "max": 591.9417330000142
+      },
+      "scenes": [
+        {
+          "name": "downward-pile",
+          "steps": 112,
+          "cpuMs": 11964.43893100007,
+          "maxStepMs": 280.43465500000457
+        },
+        {
+          "name": "zero-g",
+          "steps": 137,
+          "cpuMs": 11886.821089999998,
+          "maxStepMs": 272.8166590000037
+        },
+        {
+          "name": "continuous-flip",
+          "steps": 113,
+          "cpuMs": 12152.373605,
+          "maxStepMs": 150.04592400000547
+        },
+        {
+          "name": "high-magnitude",
+          "steps": 40,
+          "cpuMs": 12695.143099999856,
+          "maxStepMs": 525.9716860000044
+        },
+        {
+          "name": "upward-pile",
+          "steps": 43,
+          "cpuMs": 11526.844257000033,
+          "maxStepMs": 591.9417330000142
+        }
+      ],
+      "stability": {
+        "sampledStates": 37,
+        "nonFiniteComponents": 0,
+        "boundaryViolations": 0,
+        "radiusChanges": 0,
+        "conservedParticleCount": true,
+        "minimumWallClearanceMetres": -7.385388023362083e-9,
+        "maximumSpeedMetresPerSecond": 4.701777313076258,
+        "lastSampleUpperCount": 175,
+        "lastSampleLowerCount": 9825,
+        "minimumUpperCount": 175,
+        "maximumUpperCount": 10000,
+        "contacts": 277947786,
+        "droppedSeconds": 0
+      }
+    }
+  ]
+}
